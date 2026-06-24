@@ -1,6 +1,8 @@
 use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 
+mod constants;
+
 #[tokio::main]
 async fn main(){
     let app = Router::new().route("/health", get(health));
