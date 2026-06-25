@@ -11,6 +11,7 @@ use extractor::extract_events;
 
 mod database;
 mod models;
+mod repositories;
 
 #[tokio::main]
 async fn main(){
