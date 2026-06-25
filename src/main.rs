@@ -10,6 +10,7 @@ use types::WebhookPayload;
 use extractor::extract_events;
 
 mod database;
+mod models;
 
 #[tokio::main]
 async fn main(){
