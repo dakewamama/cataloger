@@ -9,6 +9,8 @@ mod extractor;
 use types::WebhookPayload;
 use extractor::extract_events;
 
+mod database;
+
 #[tokio::main]
 async fn main(){
     tracing_subscriber::fmt::init();
