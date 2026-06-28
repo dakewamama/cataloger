@@ -18,6 +18,8 @@ use state::AppState;
 use models::NewTriggerEvent;
 use constants::SUBSCRIPTIONS_PROGRAM_ID;
 
+mod events;
+
 #[tokio::main]
 async fn main(){
     tracing_subscriber::fmt::init();
