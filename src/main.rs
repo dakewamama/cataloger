@@ -19,6 +19,7 @@ use models::NewTriggerEvent;
 use constants::SUBSCRIPTIONS_PROGRAM_ID;
 
 mod events;
+mod decoder;
 
 #[tokio::main]
 async fn main(){
