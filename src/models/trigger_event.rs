@@ -8,6 +8,12 @@ pub struct TriggerEvent {
     pub discriminator: i64,
     pub raw_data: Vec<u8>,
     pub created_at: String,
+    pub plan: Option<String>,
+    pub subscriber: Option<String>,
+    pub mint: Option<String>,
+    pub amount: Option<i64>,
+    pub period_start_ts: Option<i64>,
+    pub period_end_ts: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -16,4 +22,10 @@ pub struct NewTriggerEvent {
     pub program_id: String,
     pub discriminator: u8,
     pub raw_data: Vec<u8>,
+    pub plan: Option<String>,
+    pub subscriber: Option<String>,
+    pub mint: Option<String>,
+    pub amount: Option<i64>,
+    pub period_start_ts: Option<i64>,
+    pub period_end_ts: Option<i64>,
 }

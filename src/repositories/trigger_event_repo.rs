@@ -3,6 +3,7 @@ use crate::models::{NewTriggerEvent, TriggerEvent};
 
 use crate::constants::SUBSCRIPTIONS_PROGRAM_ID;
 
+#[derive(Clone)]
 pub struct TriggerEventRepo {
     db: SqlitePool,
 }
@@ -15,15 +16,24 @@ impl TriggerEventRepo {
     pub async fn insert(&self, event: &NewTriggerEvent) -> Result<TriggerEvent, sqlx::Error> {
         let row = sqlx::query_as::<_, TriggerEvent>(
             r#"
-            INSERT INTO trigger_events (signature, program_id, discriminator, raw_data)
-            VALUES (?, ?, ?, ?)
-            RETURNING id, signature, program_id, discriminator, raw_data, created_at
+            INSERT INTO trigger_events (signature, program_id, discriminator, raw_data
+                    plan, subscriber, mint, amount, period_start_ts, period_end_ts
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id, signature, program_id, discriminator, raw_data, created_at,
+                      plan, subscriber, mint, amount, period_start_ts, period_end_ts
             "#,
         )
         .bind(&event.signature)
         .bind(&event.program_id)
         .bind(event.discriminator as i64)
         .bind(&event.raw_data)
+        .bind(&event.plan)
+        .bind(&event.subscriber)
+        .bind(&event.mint)
+        .bind(event.amount)
+        .bind(event.period_start_ts)
+        .bind(event.period_end_ts)
         .fetch_one(&self.db)
         .await?;
 
