@@ -21,6 +21,7 @@ use constants::SUBSCRIPTIONS_PROGRAM_ID;
 mod events;
 mod decoder;
 
+
 #[tokio::main]
 async fn main(){
     tracing_subscriber::fmt::init();
@@ -45,25 +46,56 @@ async fn webhook(
     State(state): State<AppState>,
     Json(payload): Json<WebhookPayload>,
 ) -> &'static str {
-    let events = extract_events(&payload);
+    let raw_events = extract_events(&payload);
+    let signature = payload.transactions.first()
+        .map(|t| t.signature.clone())
+        .unwrap_or_default();
 
-    for event in &events {
-        let discriminator = event[8];
+    for raw in &raw_events {
+        let discriminator = raw[8];
+        let decoded = decoder::decode_event(raw);
+
+        let (plan, subscriber, mint, amount, period_start_ts, period_end_ts) = match &decoded {
+            Some(events::CatalystEvent::SubscriptionCreated(e)) =>
+                (Some(e.plan.clone()), Some(e.subscriber.clone()), Some(e.mint.clone()), None, None, None),
+            Some(events::CatalystEvent::SubscriptionCancelled(e)) =>
+                (Some(e.plan.clone()), Some(e.subscriber.clone()), None, None, None, Some(e.expires_at_ts)),
+            Some(events::CatalystEvent::SubscriptionTransfer(e)) =>
+                (Some(e.plan.clone()), Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), Some(e.period_start_ts), Some(e.period_end_ts)),
+            Some(events::CatalystEvent::FixedTransfer(e)) =>
+                (None, Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), None, None),
+            Some(events::CatalystEvent::RecurringTransfer(e)) =>
+                (None, Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), Some(e.period_start_ts), Some(e.period_end_ts)),
+            Some(events::CatalystEvent::SubscriptionResumed(e)) =>
+                (Some(e.plan.clone()), Some(e.subscriber.clone()), None, None, None, None),
+            None => (None, None, None, None, None, None),
+        };
+
         let new_event = NewTriggerEvent {
-            signature: payload.transactions.first()
-                .map(|t| t.signature.clone())
-                .unwrap_or_default(),
+            signature: signature.clone(),
             program_id: SUBSCRIPTIONS_PROGRAM_ID.to_string(),
             discriminator,
-            raw_data: event.clone(),
+            raw_data: raw.clone(),
+            plan,
+            subscriber,
+            mint,
+            amount,
+            period_start_ts,
+            period_end_ts,
         };
 
         match state.trigger_event_repo.insert(&new_event).await {
-            Ok(e) => tracing::info!(id = e.id, discriminator, "event persisted"),
+            Ok(e) => {
+                tracing::info!(id = e.id, discriminator, "event persisted");
+                if let Some(event) = decoded {
+                    let _ = state.event_tx.send(event);
+                }
+            }
             Err(err) => tracing::error!(error = %err, "failed to persist event"),
         }
     }
-    tracing::info!(count = events.len(), "webhook processed");
+
+    tracing::info!(count = raw_events.len(), "webhook processed");
     "ok"
 }
 

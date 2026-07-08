@@ -13,7 +13,7 @@ pub struct SubscriptionCreated {
     pub plan: String,
     pub subscriber: String,
     pub mint: String,
-    pub created_Ts: i64,
+    pub created_ts: i64,
 }
 
 #[derive(Debug, Clone)]

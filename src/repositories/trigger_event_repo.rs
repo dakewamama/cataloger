@@ -16,7 +16,8 @@ impl TriggerEventRepo {
     pub async fn insert(&self, event: &NewTriggerEvent) -> Result<TriggerEvent, sqlx::Error> {
         let row = sqlx::query_as::<_, TriggerEvent>(
             r#"
-            INSERT INTO trigger_events (signature, program_id, discriminator, raw_data
+            INSERT INTO trigger_events (
+                    signature, program_id, discriminator, raw_data,
                     plan, subscriber, mint, amount, period_start_ts, period_end_ts
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -43,7 +44,7 @@ impl TriggerEventRepo {
     pub async fn list(&self) -> Result<Vec<TriggerEvent>, sqlx::Error> {
         let rows = sqlx::query_as::<_, TriggerEvent>(
             r#"
-            SELECT id, signature, program_id, discriminator, raw_data, created_at
+            SELECT id, signature, program_id, discriminator, raw_data, created_at, plan, subscriber, mint, amount, period_start_ts, period_end_ts
             FROM trigger_events
             ORDER BY created_at DESC
             "#,
@@ -74,6 +75,12 @@ mod tests {
             program_id: SUBSCRIPTIONS_PROGRAM_ID.to_string(),
             discriminator: 0,
             raw_data: vec![0u8; 9],
+            plan: None,
+            subscriber: None,
+            mint: None,
+            amount: None,
+            period_start_ts: None,
+            period_end_ts: None,
         };
 
         let inserted = repo.insert(&event).await.unwrap();
