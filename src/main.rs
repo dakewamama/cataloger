@@ -1,4 +1,4 @@
-use axum::{Router, routing::{get, post}, Json, extract::State};
+use axum::{Router, routing::{get, post}, Json, extract::State, middleware as axum_middleware};
 use tokio::net::TcpListener;
 
 
@@ -21,16 +21,20 @@ use constants::SUBSCRIPTIONS_PROGRAM_ID;
 mod events;
 mod decoder;
 
+mod middleware;
+
 
 #[tokio::main]
 async fn main(){
+    dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
     let state: AppState = AppState::new("sqlite://catalyst.db").await.unwrap();
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/webhook/helius", post(webhook))
+        .route("/webhook/helius",
+         post(webhook).layer(axum_middleware::from_fn(middleware::verify_helius_signature)))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
