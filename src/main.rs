@@ -29,7 +29,9 @@ async fn main(){
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    let state: AppState = AppState::new("sqlite://catalyst.db").await.unwrap();
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite://catalyst.db".to_string());
+    let state: AppState = AppState::new(&database_url).await.unwrap();
 
     let app = Router::new()
         .route("/health", get(health))
@@ -51,11 +53,9 @@ async fn webhook(
     Json(payload): Json<WebhookPayload>,
 ) -> &'static str {
     let raw_events = extract_events(&payload);
-    let signature = payload.transactions.first()
-        .map(|t| t.signature.clone())
-        .unwrap_or_default();
 
-    for raw in &raw_events {
+    for event in &raw_events {
+        let raw = &event.bytes;
         let discriminator = raw[8];
         let decoded = decoder::decode_event(raw);
 
@@ -76,7 +76,7 @@ async fn webhook(
         };
 
         let new_event = NewTriggerEvent {
-            signature: signature.clone(),
+            signature: event.signature.clone(),
             program_id: SUBSCRIPTIONS_PROGRAM_ID.to_string(),
             discriminator,
             raw_data: raw.clone(),
@@ -91,8 +91,8 @@ async fn webhook(
         match state.trigger_event_repo.insert(&new_event).await {
             Ok(e) => {
                 tracing::info!(id = e.id, discriminator, "event persisted");
-                if let Some(event) = decoded {
-                    let _ = state.event_tx.send(event);
+                if let Some(ev) = decoded {
+                    let _ = state.event_tx.send(ev);
                 }
             }
             Err(err) => tracing::error!(error = %err, "failed to persist event"),
@@ -131,7 +131,14 @@ mod tests {
     #[tokio::test]
     async fn webhook_with_no_events_returns_ok() {
         let app = build_app().await;
-        let body = r#"{"type":"TRANSFER","transactions":[{"signature":"sig123","meta":{"innerInstructions":[]}}]}"#;
+        let body = r#"[{
+            "slot": 123,
+            "meta": { "innerInstructions": [] },
+            "transaction": {
+                "message": { "accountKeys": [] },
+                "signatures": ["sig123"]
+            }
+        }]"#;
         let response = app
             .oneshot(
                 Request::builder()

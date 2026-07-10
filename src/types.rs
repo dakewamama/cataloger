@@ -1,16 +1,24 @@
 use serde::Deserialize;
 
+pub type WebhookPayload = Vec<RawTransaction>;
+
 #[derive(Deserialize)]
-pub struct WebhookPayload {
-    #[serde(rename = "type")]
-    pub event_type: String,
-    pub transactions: Vec<Transaction>,
+pub struct RawTransaction {
+    pub slot: u64,
+    pub meta: Meta,
+    pub transaction: TransactionInner,
 }
 
 #[derive(Deserialize)]
-pub struct Transaction {
-    pub signature: String,
-    pub meta: Meta,
+pub struct TransactionInner {
+    pub message: Message,
+    pub signatures: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct Message {
+    #[serde(rename = "accountKeys")]
+    pub account_keys: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -21,47 +29,48 @@ pub struct Meta {
 
 #[derive(Deserialize)]
 pub struct InnerInstruction {
+    pub index: u32,
     pub instructions: Vec<Instruction>,
 }
 
 #[derive(Deserialize)]
 pub struct Instruction {
-    #[serde(rename = "programId")]
-    pub program_id: String,
+    #[serde(rename = "programIdIndex")]
+    pub program_id_index: u32,
+    pub accounts: Vec<u32>,
     pub data: String,
-    pub accounts: Vec<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::SUBSCRIPTIONS_PROGRAM_ID;
 
     #[test]
-    fn deserializes_webhook_payload() {
-        let json = format!(r#"{{
-            "type": "TRANSFER",
-            "transactions": [{{
-                "signature": "sig123",
-                "meta": {{
-                    "innerInstructions": [{{
-                        "instructions": [{{
-                            "programId": "{}",
-                            "data": "somedata",
-                            "accounts": []
-                        }}]
-                    }}]
-                }}
-            }}]
-        }}"#, SUBSCRIPTIONS_PROGRAM_ID);
+    fn deserializes_real_helius_raw_payload_shape() {
+        let json = r#"[{
+            "slot": 123456,
+            "meta": {
+                "innerInstructions": [{
+                    "index": 0,
+                    "instructions": [{
+                        "programIdIndex": 12,
+                        "accounts": [0, 2],
+                        "data": "somedata"
+                    }]
+                }]
+            },
+            "transaction": {
+                "message": {
+                    "accountKeys": ["acct0", "acct1", "acct2"]
+                },
+                "signatures": ["sig123"]
+            }
+        }]"#;
 
-        let payload: WebhookPayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(payload.event_type, "TRANSFER");
-        assert_eq!(payload.transactions.len(), 1);
-        assert_eq!(payload.transactions[0].signature, "sig123");
-        assert_eq!(
-            payload.transactions[0].meta.inner_instructions[0].instructions[0].program_id,
-            SUBSCRIPTIONS_PROGRAM_ID
-        );
+        let payload: WebhookPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(payload.len(), 1);
+        assert_eq!(payload[0].slot, 123456);
+        assert_eq!(payload[0].transaction.signatures[0], "sig123");
+        assert_eq!(payload[0].meta.inner_instructions[0].instructions[0].program_id_index, 12);
     }
 }

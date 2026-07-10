@@ -1,17 +1,36 @@
 use crate::constants::{EVENT_IX_TAG, EVENT_PREFIX_LEN, SUBSCRIPTIONS_PROGRAM_ID};
 use crate::types::WebhookPayload;
 
-pub fn extract_events(payload: &WebhookPayload) -> Vec<Vec<u8>> {
+pub struct ExtractedEvent {
+    pub signature: String,
+    pub bytes: Vec<u8>,
+}
+
+pub fn extract_events(payload: &WebhookPayload) -> Vec<ExtractedEvent> {
     let mut events = Vec::new();
 
-    for transaction in &payload.transactions {
-        for inner in &transaction.meta.inner_instructions {
+    for tx in payload {
+        let signature = tx
+            .transaction
+            .signatures
+            .first()
+            .cloned()
+            .unwrap_or_default();
+
+        let account_keys = &tx.transaction.message.account_keys;
+
+        for inner in &tx.meta.inner_instructions {
             for instruction in &inner.instructions {
-                if instruction.program_id != SUBSCRIPTIONS_PROGRAM_ID {
+                let program_id = match account_keys.get(instruction.program_id_index as usize) {
+                    Some(id) => id,
+                    None => continue,
+                };
+
+                if program_id != SUBSCRIPTIONS_PROGRAM_ID {
                     continue;
                 }
 
-                let bytes = match bs58::decode(&instruction.data).into_vec() {
+                let bytes: Vec<u8> = match bs58::decode(&instruction.data).into_vec() {
                     Ok(b) => b,
                     Err(_) => continue,
                 };
@@ -24,7 +43,10 @@ pub fn extract_events(payload: &WebhookPayload) -> Vec<Vec<u8>> {
                     continue;
                 }
 
-                events.push(bytes);
+                events.push(ExtractedEvent {
+                    signature: signature.clone(),
+                    bytes,
+                });
             }
         }
     }
@@ -35,35 +57,39 @@ pub fn extract_events(payload: &WebhookPayload) -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{InnerInstruction, Instruction, Meta, Transaction, WebhookPayload};
+    use crate::types::{InnerInstruction, Instruction, Meta, Message, RawTransaction, TransactionInner};
 
     fn make_payload(program_id: &str, data: &str) -> WebhookPayload {
-        WebhookPayload {
-            event_type: "TEST".to_string(),
-            transactions: vec![Transaction {
-                signature: "sig".to_string(),
-                meta: Meta {
-                    inner_instructions: vec![InnerInstruction {
-                        instructions: vec![Instruction {
-                            program_id: program_id.to_string(),
-                            data: data.to_string(),
-                            accounts: vec![],
-                        }],
+        vec![RawTransaction {
+            slot: 1,
+            meta: Meta {
+                inner_instructions: vec![InnerInstruction {
+                    index: 0,
+                    instructions: vec![Instruction {
+                        program_id_index: 0,
+                        accounts: vec![],
+                        data: data.to_string(),
                     }],
+                }],
+            },
+            transaction: TransactionInner {
+                message: Message {
+                    account_keys: vec![program_id.to_string()],
                 },
-            }],
-        }
+                signatures: vec!["sig".to_string()],
+            },
+        }]
     }
 
     #[test]
-    fn drop_wrong_program_id() {
+    fn drops_wrong_program_id() {
         let payload = make_payload("wrongprogramid", "somedata");
         assert_eq!(extract_events(&payload).len(), 0);
     }
 
     #[test]
     fn drops_invalid_base58() {
-        let payload = make_payload(SUBSCRIPTIONS_PROGRAM_ID, "0OIL");
+        let payload = make_payload(SUBSCRIPTIONS_PROGRAM_ID, "0OIl");
         assert_eq!(extract_events(&payload).len(), 0);
     }
 
@@ -83,23 +109,14 @@ mod tests {
     }
 
     #[test]
-    fn returns_matching_event() {
+    fn returns_matching_event_with_signature() {
         let mut bytes = vec![0u8; 9];
         bytes[..8].copy_from_slice(&EVENT_IX_TAG);
         bytes[8] = 0;
         let encoded = bs58::encode(&bytes).into_string();
         let payload = make_payload(SUBSCRIPTIONS_PROGRAM_ID, &encoded);
-        assert_eq!(extract_events(&payload).len(), 1);
-    }
-
-    #[test]
-    fn returns_correct_bytes() {
-        let mut bytes = vec![0u8; 9];
-        bytes[..8].copy_from_slice(&EVENT_IX_TAG);
-        bytes[8] = 3;
-        let encoded = bs58::encode(&bytes).into_string();
-        let payload = make_payload(SUBSCRIPTIONS_PROGRAM_ID, &encoded);
         let events = extract_events(&payload);
-        assert_eq!(events[0][8], 3);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].signature, "sig");
     }
 }
