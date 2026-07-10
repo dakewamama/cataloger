@@ -1,7 +1,17 @@
-use sqlx::SqlitePool;
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions, SqliteConnectOptions};
+use std::str::FromStr;
 
 pub async fn connect(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
-    let pool = SqlitePool::connect(database_url).await?;
+    let options = SqliteConnectOptions::from_str(database_url)?
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .pragma("journal_mode", "WAL")
+        .pragma("synchronous", "NORMAL");
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await?;
+
     sqlx::migrate!("./migrations").run(&pool).await?;
     Ok(pool)
 }
