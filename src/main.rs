@@ -89,11 +89,14 @@ async fn webhook(
         };
 
         match state.trigger_event_repo.insert(&new_event).await {
-            Ok(e) => {
+            Ok(Some(e)) => {
                 tracing::info!(id = e.id, discriminator, "event persisted");
                 if let Some(ev) = decoded {
                     let _ = state.event_tx.send(ev);
                 }
+            }
+            Ok(None) => {
+                tracing::info!(discriminator, "duplicate event skipped");
             }
             Err(err) => {
                 tracing::error!(error = %err, "failed to persist event");

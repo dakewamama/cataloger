@@ -13,7 +13,7 @@ impl TriggerEventRepo {
         Self { db }
     }
 
-    pub async fn insert(&self, event: &NewTriggerEvent) -> Result<TriggerEvent, sqlx::Error> {
+    pub async fn insert(&self, event: &NewTriggerEvent) -> Result<Option<TriggerEvent>, sqlx::Error> {
         let row = sqlx::query_as::<_, TriggerEvent>(
             r#"
             INSERT INTO trigger_events (
@@ -21,6 +21,7 @@ impl TriggerEventRepo {
                     plan, subscriber, mint, amount, period_start_ts, period_end_ts
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(signature, discriminator, raw_data) DO NOTHING
             RETURNING id, signature, program_id, discriminator, raw_data, created_at,
                       plan, subscriber, mint, amount, period_start_ts, period_end_ts
             "#,
@@ -35,7 +36,7 @@ impl TriggerEventRepo {
         .bind(event.amount)
         .bind(event.period_start_ts)
         .bind(event.period_end_ts)
-        .fetch_one(&self.db)
+        .fetch_optional(&self.db)
         .await?;
 
         Ok(row)
@@ -66,11 +67,8 @@ mod tests {
         TriggerEventRepo::new(pool)
     }
 
-    #[tokio::test]
-    async fn inserts_and_lists_event() {
-        let repo = setup().await;
-
-        let event = NewTriggerEvent {
+    fn make_event() -> NewTriggerEvent {
+        NewTriggerEvent {
             signature: "testsig".to_string(),
             program_id: SUBSCRIPTIONS_PROGRAM_ID.to_string(),
             discriminator: 0,
@@ -81,11 +79,17 @@ mod tests {
             amount: None,
             period_start_ts: None,
             period_end_ts: None,
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn inserts_and_lists_event() {
+        let repo = setup().await;
+        let event = make_event();
 
         let inserted = repo.insert(&event).await.unwrap();
-        assert_eq!(inserted.signature, "testsig");
-        assert_eq!(inserted.discriminator, 0);
+        assert!(inserted.is_some());
+        assert_eq!(inserted.unwrap().signature, "testsig");
 
         let all = repo.list().await.unwrap();
         assert_eq!(all.len(), 1);
@@ -96,5 +100,20 @@ mod tests {
         let repo = setup().await;
         let all = repo.list().await.unwrap();
         assert_eq!(all.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn duplicate_insert_is_skipped_not_errored() {
+        let repo = setup().await;
+        let event = make_event();
+
+        let first = repo.insert(&event).await.unwrap();
+        assert!(first.is_some());
+
+        let second = repo.insert(&event).await.unwrap();
+        assert!(second.is_none());
+
+        let all = repo.list().await.unwrap();
+        assert_eq!(all.len(), 1);
     }
 }
