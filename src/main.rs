@@ -1,4 +1,4 @@
-use axum::{Router, routing::{get, post}, Json, extract::State, middleware as axum_middleware};
+use axum::{Json, Router, extract::State, http::StatusCode, middleware as axum_middleware, routing::{get, post}};
 use tokio::net::TcpListener;
 
 
@@ -51,7 +51,7 @@ async fn health() -> &'static str {
 async fn webhook(
     State(state): State<AppState>,
     Json(payload): Json<WebhookPayload>,
-) -> &'static str {
+) -> StatusCode {
     let raw_events = extract_events(&payload);
 
     for event in &raw_events {
@@ -95,12 +95,15 @@ async fn webhook(
                     let _ = state.event_tx.send(ev);
                 }
             }
-            Err(err) => tracing::error!(error = %err, "failed to persist event"),
+            Err(err) => {
+                tracing::error!(error = %err, "failed to persist event");
+                return StatusCode::INTERNAL_SERVER_ERROR;
+            }
         }
     }
 
     tracing::info!(count = raw_events.len(), "webhook processed");
-    "ok"
+    StatusCode::OK
 }
 
 #[cfg(test)]
