@@ -10,6 +10,9 @@ pub fn extract_events(payload: &WebhookPayload) -> Vec<ExtractedEvent> {
     let mut events = Vec::new();
 
     for tx in payload {
+        if tx.meta.err.is_some() {
+            continue;
+        }
         let signature = tx
             .transaction
             .signatures
@@ -63,6 +66,7 @@ mod tests {
         vec![RawTransaction {
             slot: 1,
             meta: Meta {
+                err: None,
                 inner_instructions: vec![InnerInstruction {
                     index: 0,
                     instructions: vec![Instruction {
@@ -118,5 +122,18 @@ mod tests {
         let events = extract_events(&payload);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].signature, "sig");
+    }
+
+    #[test]
+    fn drops_events_from_failed_transactions() {
+        let mut bytes = vec![0u8; 9];
+        bytes[..8].copy_from_slice(&EVENT_IX_TAG);
+        bytes[8] = 0;
+        let encoded = bs58::encode(&bytes).into_string();
+
+        let mut payload = make_payload(SUBSCRIPTIONS_PROGRAM_ID, &encoded);
+        payload[0].meta.err = Some(serde_json::json!({"InstructionError": [0, "Custom"]}));
+
+        assert_eq!(extract_events(&payload).len(), 0);
     }
 }

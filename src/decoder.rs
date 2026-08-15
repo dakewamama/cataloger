@@ -18,6 +18,16 @@ fn read_i64(buf: &[u8], offset: usize) -> i64 {
     i64::from_le_bytes(buf[offset..offset + 8].try_into().unwrap())
 }
 
+fn event_data_len(discriminator: u8) -> Option<usize> {
+    match discriminator {
+        0 => Some(32 * 3 + 8), // SubscriptionCreated
+        1 | 5 => Some(32 * 2 + 8), // SubscriptionCancelled / SubscriptionResumed
+        2 | 4 => Some(32 * 5 + 8 * 4), // SubscriptionTransfer / RecurringTransfer
+        3 => Some(32 * 5 + 8 * 2), // FixedTransfer
+        _ => None,
+    }
+}
+
 pub fn decode_event(raw: &[u8]) -> Option<CatalystEvent> {
     if raw.len() < EVENT_PREFIX_LEN {
         return None;
@@ -28,6 +38,10 @@ pub fn decode_event(raw: &[u8]) -> Option<CatalystEvent> {
 
     let discriminator = raw[8];
     let p = &raw[EVENT_PREFIX_LEN..];
+    let expected_len = event_data_len(discriminator)?;
+    if p.len() < expected_len {
+        return None;
+    }
 
     match discriminator {
         0 => Some(CatalystEvent::SubscriptionCreated(SubscriptionCreated {
@@ -134,5 +148,22 @@ mod tests {
     #[test]
     fn returns_none_for_short_payload() {
         assert!(decode_event(&[0u8; 4]).is_none());
+    }
+
+    #[test]
+    fn rejects_truncated_and_accepts_exact_for_every_discriminator() {
+        for disc in 0u8..=5 {
+            let len = event_data_len(disc).unwrap();
+
+            let mut short = EVENT_IX_TAG.to_vec();
+            short.push(disc);
+            short.extend_from_slice(&vec![0u8; len - 1]);
+            assert!(decode_event(&short).is_none(), "disc {disc} accepted short payload");
+
+            let mut exact = EVENT_IX_TAG.to_vec();
+            exact.push(disc);
+            exact.extend_from_slice(&vec![0u8; len]);
+            assert!(decode_event(&exact).is_some(), "disc {disc} rejected exact payload");
+        }
     }
 }

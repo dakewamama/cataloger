@@ -23,7 +23,9 @@ pub struct Message {
 
 #[derive(Deserialize)]
 pub struct Meta {
-    #[serde(rename = "innerInstructions")]
+    #[serde(default)]
+    pub err: Option<serde_json::Value>,
+    #[serde(rename = "innerInstructions", default)]
     pub inner_instructions: Vec<InnerInstruction>,
 }
 
