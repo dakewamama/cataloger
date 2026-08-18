@@ -14,6 +14,7 @@ pub struct TriggerEvent {
     pub amount: Option<i64>,
     pub period_start_ts: Option<i64>,
     pub period_end_ts: Option<i64>,
+    pub delegation: Option<String>,
 }
 
 #[derive(Debug)]
@@ -28,4 +29,5 @@ pub struct NewTriggerEvent {
     pub amount: Option<i64>,
     pub period_start_ts: Option<i64>,
     pub period_end_ts: Option<i64>,
+    pub delegation: Option<String>,
 }
