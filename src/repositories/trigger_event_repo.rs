@@ -18,12 +18,12 @@ impl TriggerEventRepo {
             r#"
             INSERT INTO trigger_events (
                     signature, program_id, discriminator, raw_data,
-                    plan, subscriber, mint, amount, period_start_ts, period_end_ts
+                    plan, subscriber, mint, amount, period_start_ts, period_end_ts, delegation
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(signature, discriminator, raw_data) DO NOTHING
             RETURNING id, signature, program_id, discriminator, raw_data, created_at,
-                      plan, subscriber, mint, amount, period_start_ts, period_end_ts
+                      plan, subscriber, mint, amount, period_start_ts, period_end_ts, delegation
             "#,
         )
         .bind(&event.signature)
@@ -36,6 +36,7 @@ impl TriggerEventRepo {
         .bind(event.amount)
         .bind(event.period_start_ts)
         .bind(event.period_end_ts)
+        .bind(&event.delegation)
         .fetch_optional(&self.db)
         .await?;
 
@@ -45,7 +46,7 @@ impl TriggerEventRepo {
     pub async fn list(&self) -> Result<Vec<TriggerEvent>, sqlx::Error> {
         let rows = sqlx::query_as::<_, TriggerEvent>(
             r#"
-            SELECT id, signature, program_id, discriminator, raw_data, created_at, plan, subscriber, mint, amount, period_start_ts, period_end_ts
+            SELECT id, signature, program_id, discriminator, raw_data, created_at, plan, subscriber, mint, amount, period_start_ts, period_end_ts, delegation
             FROM trigger_events
             ORDER BY created_at DESC
             "#,
@@ -79,6 +80,7 @@ mod tests {
             amount: None,
             period_start_ts: None,
             period_end_ts: None,
+            delegation: None,
         }
     }
 

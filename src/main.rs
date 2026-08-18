@@ -59,20 +59,20 @@ async fn webhook(
         let discriminator = raw[8];
         let decoded = decoder::decode_event(raw);
 
-        let (plan, subscriber, mint, amount, period_start_ts, period_end_ts) = match &decoded {
+        let (plan, subscriber, mint, amount, period_start_ts, period_end_ts, delegation) = match &decoded {
             Some(events::CatalystEvent::SubscriptionCreated(e)) =>
-                (Some(e.plan.clone()), Some(e.subscriber.clone()), Some(e.mint.clone()), None, None, None),
+                (Some(e.plan.clone()), Some(e.subscriber.clone()), Some(e.mint.clone()), None, None, None, None),
             Some(events::CatalystEvent::SubscriptionCancelled(e)) =>
-                (Some(e.plan.clone()), Some(e.subscriber.clone()), None, None, None, Some(e.expires_at_ts)),
+                (Some(e.plan.clone()), Some(e.subscriber.clone()), None, None, None, Some(e.expires_at_ts), None),
             Some(events::CatalystEvent::SubscriptionTransfer(e)) =>
-                (Some(e.plan.clone()), Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), Some(e.period_start_ts), Some(e.period_end_ts)),
+                (Some(e.plan.clone()), Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), Some(e.period_start_ts), Some(e.period_end_ts), Some(e.subscription.clone())),
             Some(events::CatalystEvent::FixedTransfer(e)) =>
-                (None, Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), None, None),
+                (None, Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), None, None, Some(e.delegation.clone())),
             Some(events::CatalystEvent::RecurringTransfer(e)) =>
-                (None, Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), Some(e.period_start_ts), Some(e.period_end_ts)),
+                (None, Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), Some(e.period_start_ts), Some(e.period_end_ts), Some(e.delegation.clone())),
             Some(events::CatalystEvent::SubscriptionResumed(e)) =>
-                (Some(e.plan.clone()), Some(e.subscriber.clone()), None, None, None, None),
-            None => (None, None, None, None, None, None),
+                (Some(e.plan.clone()), Some(e.subscriber.clone()), None, None, None, None, None),
+            None => (None, None, None, None, None, None, None),
         };
 
         let new_event = NewTriggerEvent {
@@ -86,6 +86,7 @@ async fn webhook(
             amount,
             period_start_ts,
             period_end_ts,
+            delegation,
         };
 
         match state.trigger_event_repo.insert(&new_event).await {
