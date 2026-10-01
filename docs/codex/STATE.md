@@ -24,13 +24,16 @@
 - GitHub repository names and remote redirects verified, identities unchanged.
 - No SPL or Token-2022 deployment has been entered into the catalog yet.
 - No Subscriptions source study; SUB-0 locked.
+- SDK reuse audit inspected official token client interfaces (not executed). Reuse
+  responsibilities and the 2.x/3.x type compatibility boundary are recorded there.
 
 ## Real blockers
 
-- Architecture book not located; constitution supplies current engineering requirements.
+- None for this audit. Architecture book not located; constitution supplies current requirements.
 
 ## Next critical path
 
-- Commit/push resolver milestone, then official SPL/Token-2022 source and golden fixtures.
+- Resolver milestone pushed at 0040ee5; next official token interface compatibility,
+  golden state fixtures and revoke round trip.
 - Record verified deployment coverage before advertising a live supported version.
 - Do not create a separate repository to compensate for historical names.
