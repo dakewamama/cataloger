@@ -1,42 +1,50 @@
-use axum::{Json, Router, extract::State, http::StatusCode, middleware as axum_middleware, routing::{get, post}};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    middleware as axum_middleware,
+    routing::{get, post},
+};
 use tokio::net::TcpListener;
 
-
 mod constants;
-mod types;
 mod extractor;
+mod types;
 
-use types::WebhookPayload;
 use extractor::extract_events;
+use types::WebhookPayload;
 
 mod database;
 mod models;
 mod repositories;
 mod state;
 
-use state::AppState;
-use models::NewTriggerEvent;
 use constants::SUBSCRIPTIONS_PROGRAM_ID;
+use models::NewTriggerEvent;
+use state::AppState;
 
-mod events;
 mod decoder;
+mod events;
 
 mod middleware;
 
-
 #[tokio::main]
-async fn main(){
+async fn main() {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "sqlite://catalyst.db".to_string());
+    let database_url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://catalyst.db".to_string());
     let state: AppState = AppState::new(&database_url).await.unwrap();
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/webhook/helius",
-         post(webhook).layer(axum_middleware::from_fn(middleware::verify_helius_signature)))
+        .route(
+            "/webhook/helius",
+            post(webhook).layer(axum_middleware::from_fn(
+                middleware::verify_helius_signature,
+            )),
+        )
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -48,10 +56,7 @@ async fn health() -> &'static str {
     "ok"
 }
 
-async fn webhook(
-    State(state): State<AppState>,
-    Json(payload): Json<WebhookPayload>,
-) -> StatusCode {
+async fn webhook(State(state): State<AppState>, Json(payload): Json<WebhookPayload>) -> StatusCode {
     let raw_events = extract_events(&payload);
 
     for event in &raw_events {
@@ -59,21 +64,64 @@ async fn webhook(
         let discriminator = raw[8];
         let decoded = decoder::decode_event(raw);
 
-        let (plan, subscriber, mint, amount, period_start_ts, period_end_ts, delegation) = match &decoded {
-            Some(events::CatalystEvent::SubscriptionCreated(e)) =>
-                (Some(e.plan.clone()), Some(e.subscriber.clone()), Some(e.mint.clone()), None, None, None, None),
-            Some(events::CatalystEvent::SubscriptionCancelled(e)) =>
-                (Some(e.plan.clone()), Some(e.subscriber.clone()), None, None, None, Some(e.expires_at_ts), None),
-            Some(events::CatalystEvent::SubscriptionTransfer(e)) =>
-                (Some(e.plan.clone()), Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), Some(e.period_start_ts), Some(e.period_end_ts), Some(e.subscription.clone())),
-            Some(events::CatalystEvent::FixedTransfer(e)) =>
-                (None, Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), None, None, Some(e.delegation.clone())),
-            Some(events::CatalystEvent::RecurringTransfer(e)) =>
-                (None, Some(e.delegator.clone()), Some(e.mint.clone()), Some(e.amount as i64), Some(e.period_start_ts), Some(e.period_end_ts), Some(e.delegation.clone())),
-            Some(events::CatalystEvent::SubscriptionResumed(e)) =>
-                (Some(e.plan.clone()), Some(e.subscriber.clone()), None, None, None, None, None),
-            None => (None, None, None, None, None, None, None),
-        };
+        let (plan, subscriber, mint, amount, period_start_ts, period_end_ts, delegation) =
+            match &decoded {
+                Some(events::CatalystEvent::SubscriptionCreated(e)) => (
+                    Some(e.plan.clone()),
+                    Some(e.subscriber.clone()),
+                    Some(e.mint.clone()),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                Some(events::CatalystEvent::SubscriptionCancelled(e)) => (
+                    Some(e.plan.clone()),
+                    Some(e.subscriber.clone()),
+                    None,
+                    None,
+                    None,
+                    Some(e.expires_at_ts),
+                    None,
+                ),
+                Some(events::CatalystEvent::SubscriptionTransfer(e)) => (
+                    Some(e.plan.clone()),
+                    Some(e.delegator.clone()),
+                    Some(e.mint.clone()),
+                    Some(e.amount as i64),
+                    Some(e.period_start_ts),
+                    Some(e.period_end_ts),
+                    Some(e.subscription.clone()),
+                ),
+                Some(events::CatalystEvent::FixedTransfer(e)) => (
+                    None,
+                    Some(e.delegator.clone()),
+                    Some(e.mint.clone()),
+                    Some(e.amount as i64),
+                    None,
+                    None,
+                    Some(e.delegation.clone()),
+                ),
+                Some(events::CatalystEvent::RecurringTransfer(e)) => (
+                    None,
+                    Some(e.delegator.clone()),
+                    Some(e.mint.clone()),
+                    Some(e.amount as i64),
+                    Some(e.period_start_ts),
+                    Some(e.period_end_ts),
+                    Some(e.delegation.clone()),
+                ),
+                Some(events::CatalystEvent::SubscriptionResumed(e)) => (
+                    Some(e.plan.clone()),
+                    Some(e.subscriber.clone()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                None => (None, None, None, None, None, None, None),
+            };
 
         let new_event = NewTriggerEvent {
             signature: event.signature.clone(),
@@ -91,7 +139,12 @@ async fn webhook(
 
         match state.trigger_event_repo.insert(&new_event).await {
             Ok(Some(e)) => {
-                tracing::info!(id = e.id, discriminator, "event persisted");
+                tracing::info!(
+                    id = e.id,
+                    slot = event.slot,
+                    discriminator,
+                    "event persisted"
+                );
                 if let Some(ev) = decoded {
                     let _ = state.event_tx.send(ev);
                 }
@@ -129,7 +182,12 @@ mod tests {
     async fn health_returns_ok() {
         let app = build_app().await;
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);

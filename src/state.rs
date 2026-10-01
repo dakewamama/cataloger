@@ -1,9 +1,8 @@
+use crate::events::CatalystEvent;
+use crate::repositories::TriggerEventRepo;
 use axum::extract::FromRef;
 use sqlx::SqlitePool;
-use crate::repositories::TriggerEventRepo;
 use tokio::sync::broadcast;
-use crate::events::CatalystEvent;
-
 
 pub const BROADCAST_CAPACITY: usize = 1024;
 
@@ -19,6 +18,10 @@ impl AppState {
         let database = crate::database::connect(database_url).await?;
         let trigger_event_repo = TriggerEventRepo::new(database.clone());
         let (event_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
-        Ok(Self { database, trigger_event_repo, event_tx })
+        Ok(Self {
+            database,
+            trigger_event_repo,
+            event_tx,
+        })
     }
 }

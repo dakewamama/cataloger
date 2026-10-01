@@ -3,6 +3,7 @@ use crate::types::WebhookPayload;
 
 pub struct ExtractedEvent {
     pub signature: String,
+    pub slot: u64,
     pub bytes: Vec<u8>,
 }
 
@@ -48,6 +49,7 @@ pub fn extract_events(payload: &WebhookPayload) -> Vec<ExtractedEvent> {
 
                 events.push(ExtractedEvent {
                     signature: signature.clone(),
+                    slot: tx.slot,
                     bytes,
                 });
             }
@@ -60,7 +62,9 @@ pub fn extract_events(payload: &WebhookPayload) -> Vec<ExtractedEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{InnerInstruction, Instruction, Meta, Message, RawTransaction, TransactionInner};
+    use crate::types::{
+        InnerInstruction, Instruction, Message, Meta, RawTransaction, TransactionInner,
+    };
 
     fn make_payload(program_id: &str, data: &str) -> WebhookPayload {
         vec![RawTransaction {
@@ -68,10 +72,8 @@ mod tests {
             meta: Meta {
                 err: None,
                 inner_instructions: vec![InnerInstruction {
-                    index: 0,
                     instructions: vec![Instruction {
                         program_id_index: 0,
-                        accounts: vec![],
                         data: data.to_string(),
                     }],
                 }],
@@ -122,6 +124,7 @@ mod tests {
         let events = extract_events(&payload);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].signature, "sig");
+        assert_eq!(events[0].slot, 1);
     }
 
     #[test]

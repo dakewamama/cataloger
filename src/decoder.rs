@@ -1,7 +1,7 @@
 use crate::constants::{EVENT_IX_TAG, EVENT_PREFIX_LEN};
 use crate::events::{
-    CatalystEvent, FixedTransfer, RecurringTransfer, SubscriptionCancelled,
-    SubscriptionCreated, SubscriptionResumed, SubscriptionTransfer,
+    CatalystEvent, FixedTransfer, RecurringTransfer, SubscriptionCancelled, SubscriptionCreated,
+    SubscriptionResumed, SubscriptionTransfer,
 };
 
 const ADDRESS_LEN: usize = 32;
@@ -20,10 +20,10 @@ fn read_i64(buf: &[u8], offset: usize) -> i64 {
 
 fn event_data_len(discriminator: u8) -> Option<usize> {
     match discriminator {
-        0 => Some(32 * 3 + 8), // SubscriptionCreated
-        1 | 5 => Some(32 * 2 + 8), // SubscriptionCancelled / SubscriptionResumed
+        0 => Some(32 * 3 + 8),         // SubscriptionCreated
+        1 | 5 => Some(32 * 2 + 8),     // SubscriptionCancelled / SubscriptionResumed
         2 | 4 => Some(32 * 5 + 8 * 4), // SubscriptionTransfer / RecurringTransfer
-        3 => Some(32 * 5 + 8 * 2), // FixedTransfer
+        3 => Some(32 * 5 + 8 * 2),     // FixedTransfer
         _ => None,
     }
 }
@@ -50,11 +50,13 @@ pub fn decode_event(raw: &[u8]) -> Option<CatalystEvent> {
             mint: read_address(p, 64),
             created_ts: read_i64(p, 96),
         })),
-        1 => Some(CatalystEvent::SubscriptionCancelled(SubscriptionCancelled {
-            plan: read_address(p, 0),
-            subscriber: read_address(p, 32),
-            expires_at_ts: read_i64(p, 64),
-        })),
+        1 => Some(CatalystEvent::SubscriptionCancelled(
+            SubscriptionCancelled {
+                plan: read_address(p, 0),
+                subscriber: read_address(p, 32),
+                expires_at_ts: read_i64(p, 64),
+            },
+        )),
         2 => Some(CatalystEvent::SubscriptionTransfer(SubscriptionTransfer {
             subscription: read_address(p, 0),
             plan: read_address(p, 32),
@@ -158,12 +160,18 @@ mod tests {
             let mut short = EVENT_IX_TAG.to_vec();
             short.push(disc);
             short.extend_from_slice(&vec![0u8; len - 1]);
-            assert!(decode_event(&short).is_none(), "disc {disc} accepted short payload");
+            assert!(
+                decode_event(&short).is_none(),
+                "disc {disc} accepted short payload"
+            );
 
             let mut exact = EVENT_IX_TAG.to_vec();
             exact.push(disc);
             exact.extend_from_slice(&vec![0u8; len]);
-            assert!(decode_event(&exact).is_some(), "disc {disc} rejected exact payload");
+            assert!(
+                decode_event(&exact).is_some(),
+                "disc {disc} rejected exact payload"
+            );
         }
     }
 }
