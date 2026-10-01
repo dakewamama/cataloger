@@ -24,8 +24,9 @@
 - GitHub repository names and remote redirects verified, identities unchanged.
 - No SPL or Token-2022 deployment has been entered into the catalog yet.
 - No Subscriptions source study; SUB-0 locked.
-- SDK reuse audit inspected official token client interfaces (not executed). Reuse
-  responsibilities and the 2.x/3.x type compatibility boundary are recorded there.
+- Cataloger now uses solana-pubkey 4.2.0, the native address type compiled with
+  official token interfaces and Mollusk in the SDK compatibility proof.
+- This dependency change adds no deployment records or new resolution claims.
 
 ## Real blockers
 
