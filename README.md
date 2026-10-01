@@ -1,5 +1,47 @@
 # cataloger
 
+Cataloger resolves verified deployment identity and semantic provenance. The Rust
+library is named cataloger; the existing webhook binary remains catalyst-indexer.
+The GitHub repository was renamed from catalyst-indexer, and that old URL redirects here.
+
+## Static deployment resolver
+
+Catalog::new accepts manually verified ProgramVersion records. Each record binds a
+cluster genesis hash and native program key to a deployment/version, half-open slot
+range, schema source/revision, semantic adapter/version/source, supported ARM capabilities
+and provenance evidence. Cataloger does not discover, crawl or decode program state.
+
+Construction rejects malformed records, duplicate capability declarations and overlapping
+history. Record order does not affect resolution. resolve checks cluster, program and slot,
+plus an optional exact version selector, and returns the original record with its provenance.
+Unknown versions, gaps, future slots and mismatched selectors return UnsupportedVersion.
+
+Every range has an explicit exclusive end_slot bounded by verified observation coverage.
+There is no open-ended "latest version" assumption. Native upgrades must extend/replace
+verified catalog data; future versions are never decoded optimistically. native_context
+provides ARM provenance for Catalyst dispatch; the caller also binds the native program key.
+The caller is responsible for authenticating records and their evidence: nonempty provenance
+fields establish structural validity, not that an arbitrary input is authoritative.
+
+Seven synthetic resolver tests cover upgrade boundaries, gaps, version rejection,
+ambiguous history, independent cluster/program ranges, determinism and provenance.
+No live deployment is registered yet. Real SPL coverage and native fixtures are next.
+
+```sh
+cargo fmt --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+git diff --check
+```
+
+## Existing observation service
+
+The retained binary is the previous ingestion implementation described below. It does
+not dispatch through Cataloger yet and must not be presented as a version-verified
+semantic runtime. Its existing migrations and event storage remain available for the
+runtime integration milestone. Extraction now retains transaction slot for logging;
+unused webhook index/account-list fields are ignored by Serde rather than modeled.
+
 Event indexer for the [Solana Subscriptions Program](https://github.com/solana-foundation/subscriptions) (`De1egAFMkMWZSN5rYXRj9CAdheBamobVNubTsi9avR44`).
 
 Ingests Helius raw webhooks, decodes self-CPI event data from inner instructions, persists raw bytes alongside decoded fields, and broadcasts typed events to downstream consumers.

@@ -1,5 +1,4 @@
-pub const SUBSCRIPTIONS_PROGRAM_ID: &str =
-    "De1egAFMkMWZSN5rYXRj9CAdheBamobVNubTsi9avR44";
+pub const SUBSCRIPTIONS_PROGRAM_ID: &str = "De1egAFMkMWZSN5rYXRj9CAdheBamobVNubTsi9avR44";
 
 pub const EVENT_IX_TAG: [u8; 8] = [0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d];
 

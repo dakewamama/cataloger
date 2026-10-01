@@ -1,7 +1,5 @@
-use sqlx::SqlitePool;
 use crate::models::{NewTriggerEvent, TriggerEvent};
-
-use crate::constants::SUBSCRIPTIONS_PROGRAM_ID;
+use sqlx::SqlitePool;
 
 #[derive(Clone)]
 pub struct TriggerEventRepo {
@@ -13,7 +11,10 @@ impl TriggerEventRepo {
         Self { db }
     }
 
-    pub async fn insert(&self, event: &NewTriggerEvent) -> Result<Option<TriggerEvent>, sqlx::Error> {
+    pub async fn insert(
+        &self,
+        event: &NewTriggerEvent,
+    ) -> Result<Option<TriggerEvent>, sqlx::Error> {
         let row = sqlx::query_as::<_, TriggerEvent>(
             r#"
             INSERT INTO trigger_events (
@@ -61,6 +62,7 @@ impl TriggerEventRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::SUBSCRIPTIONS_PROGRAM_ID;
     use crate::database::connect;
 
     async fn setup() -> TriggerEventRepo {

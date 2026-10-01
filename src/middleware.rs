@@ -9,8 +9,8 @@ pub async fn verify_helius_signature(
     req: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let secret = std::env::var("HELIUS_WEBHOOK_SECRET")
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let secret =
+        std::env::var("HELIUS_WEBHOOK_SECRET").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let auth_header = req
         .headers()

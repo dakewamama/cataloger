@@ -31,7 +31,6 @@ pub struct Meta {
 
 #[derive(Deserialize)]
 pub struct InnerInstruction {
-    pub index: u32,
     pub instructions: Vec<Instruction>,
 }
 
@@ -39,7 +38,6 @@ pub struct InnerInstruction {
 pub struct Instruction {
     #[serde(rename = "programIdIndex")]
     pub program_id_index: u32,
-    pub accounts: Vec<u32>,
     pub data: String,
 }
 
@@ -73,6 +71,9 @@ mod tests {
         assert_eq!(payload.len(), 1);
         assert_eq!(payload[0].slot, 123456);
         assert_eq!(payload[0].transaction.signatures[0], "sig123");
-        assert_eq!(payload[0].meta.inner_instructions[0].instructions[0].program_id_index, 12);
+        assert_eq!(
+            payload[0].meta.inner_instructions[0].instructions[0].program_id_index,
+            12
+        );
     }
 }
