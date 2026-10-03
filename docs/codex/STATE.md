@@ -17,7 +17,8 @@
   7 resolver tests and 23 retained runtime tests. Cargo.lock contains no ARM dependency.
 - Historical GitHub main runs for 0040ee5, 0d33570 and d60d492 failed. Local success did
   not establish CI success. Latest failed job has no steps: GitHub annotation says
-  the account is locked due to a billing issue. Hosted CI is not green.
+  the account is locked due to a billing issue. Hosted CI is EXTERNALLY BLOCKED.
+  This external lock does not invalidate exact local workflow evidence.
 
 ## Runtime backlog
 
@@ -35,7 +36,8 @@
 
 ## Next critical path
 
-- Complete exact local workflow checks, push the correction and verify GitHub main CI.
-- Subscriptions study is paused until Cataloger main is actually green. Study had started
-  after an incomplete SUB-0 review; no Subscriptions adapter or upstream edits were made.
+- Boundary correction pushed at a88dbd8; final local workflow recheck passes all 30 tests.
+- Owner explicitly approved progression with hosted CI EXTERNALLY BLOCKED. Railway is
+  not a CI substitute. Subscriptions maintainer study is unlocked after final SDK
+  Freeze/Thaw Direct correction and local SUB-0 review. No adapter implementation yet.
 - Architecture book remains unlocated; constitution supplies current requirements.
