@@ -1,4 +1,3 @@
-use arm::Capability;
 use cataloger::{AdapterRef, Catalog, Error, ProgramVersion, Provenance, SchemaSource};
 use solana_pubkey::Pubkey;
 
@@ -8,8 +7,8 @@ fn record(start: u64, end: u64, version: &str) -> ProgramVersion {
         program_id: Pubkey::new_from_array([7; 32]),
         deployment: format!("fixture:deployment:{version}"),
         version: version.into(),
-        start_slot: start,
-        end_slot: end,
+        supported_from_slot: start,
+        supported_until_slot_exclusive: end,
         schema: SchemaSource {
             uri: "fixture:schema".into(),
             revision: version.into(),
@@ -19,7 +18,6 @@ fn record(start: u64, end: u64, version: &str) -> ProgramVersion {
             version: "0.1".into(),
             source: "fixture:adapter-commit".into(),
         },
-        supported_semantics: vec![Capability::Spend],
         provenance: Provenance {
             source: "fixture:deployment-observation".into(),
             revision: "fixture:commit".into(),
@@ -29,7 +27,7 @@ fn record(start: u64, end: u64, version: &str) -> ProgramVersion {
 }
 
 #[test]
-fn bounded_upgrade_history_resolves_exact_boundary_slots() {
+fn bounded_support_resolves_exact_boundary_slots() {
     let catalog = Catalog::new(vec![record(20, 30, "2"), record(10, 20, "1")]).unwrap();
     let program = Pubkey::new_from_array([7; 32]);
     for (slot, version) in [(10, "1"), (19, "1"), (20, "2"), (29, "2")] {
@@ -37,7 +35,6 @@ fn bounded_upgrade_history_resolves_exact_boundary_slots() {
             .resolve("fixture:genesis", &program, slot, None)
             .unwrap();
         assert_eq!(resolved.version, version);
-        assert_eq!(resolved.native_context().program_version, version);
     }
     for slot in [0, 9, 30, u64::MAX] {
         assert_eq!(
@@ -92,11 +89,6 @@ fn resolution_is_independent_of_record_order_and_keeps_provenance() {
             .unwrap()
     );
     assert_eq!(resolved, &first);
-    assert_eq!(
-        resolved.native_context().adapter_version,
-        first.adapter.version
-    );
-    assert_eq!(resolved.native_context().deployment, first.deployment);
 }
 
 #[test]
@@ -115,7 +107,7 @@ fn ambiguous_deployment_history_is_rejected() {
 
 #[test]
 fn gaps_and_empty_catalogs_do_not_guess() {
-    let catalog = Catalog::new(vec![record(10, 20, "1"), record(30, 40, "2")]).unwrap();
+    let catalog = Catalog::new(vec![record(10, 20, "1"), record(30, 40, "1")]).unwrap();
     let key = Pubkey::new_from_array([7; 32]);
     for slot in 20..30 {
         assert_eq!(
@@ -123,6 +115,13 @@ fn gaps_and_empty_catalogs_do_not_guess() {
             Err(Error::UnsupportedVersion)
         );
     }
+    assert_eq!(
+        catalog
+            .resolve("fixture:genesis", &key, 30, None)
+            .unwrap()
+            .version,
+        "1"
+    );
     assert_eq!(
         Catalog::new(vec![])
             .unwrap()
@@ -132,15 +131,14 @@ fn gaps_and_empty_catalogs_do_not_guess() {
 }
 
 #[test]
-fn incomplete_provenance_invalid_ranges_and_duplicate_semantics_reject() {
-    for field in 0..5 {
+fn incomplete_provenance_and_invalid_ranges_reject() {
+    for field in 0..4 {
         let mut version = record(10, 20, "1");
         match field {
-            0 => version.end_slot = 10,
+            0 => version.supported_until_slot_exclusive = 10,
             1 => version.provenance.evidence_reference.clear(),
             2 => version.schema.revision.clear(),
-            3 => version.adapter.source.clear(),
-            _ => version.supported_semantics.push(Capability::Spend),
+            _ => version.adapter.source.clear(),
         }
         assert_eq!(
             Catalog::new(vec![version]).unwrap_err(),

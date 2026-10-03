@@ -2,39 +2,40 @@
 
 ## Completed
 
-- Actual GitHub mapping: catalyst-crank -> arm; catalyst-indexer -> cataloger.
-  The old catalyst-indexer GitHub URL redirects to cataloger as well; there is no
-  distinct indexer among these checkouts.
-- ARM root library pushed: 5b05e06892dcc6d20d1db7f0324030916b152d6a.
-- Catalyst semantic ABI pushed: d803c44 (main).
-- Static Cataloger library resolves bounded deployment history with schema, adapter,
-  supported ARM capabilities and provenance. Unknown slots/versions fail closed.
-- Existing webhook binary retained as catalyst-indexer; no on-chain source changed.
+- Existing GitHub cataloger repository is the renamed catalyst-indexer checkout.
+- Static resolver preserves cluster genesis identity, native program key,
+  deployment/version, schema, adapter reference and provenance.
+- Boundary correction removes the ARM dependency, capability declarations and ARM
+  context conversion. Runtime joins Cataloger with Catalyst.
+- supported_from_slot and supported_until_slot_exclusive bound verified interpretation,
+  not deployment lifetime. No live deployment records or workspace split were added.
+- Legacy webhook binary and database remain unchanged.
 
 ## Test status
 
-- Cataloger: 7 resolver tests plus all 23 legacy tests pass; strict Clippy passes.
-- ARM: 12 tests plus fmt/Clippy pass.
-- SDK: 6 Rust ABI tests, 3 Bun tests and TypeScript check pass; fmt/Clippy pass.
-- Known legacy authentication tests do not actually exercise middleware; amounts
-  still use unchecked u64 -> i64 conversion. These are runtime issues, not resolver claims.
+- Correction: exact workflow commands pass locally: formatting, strict Clippy,
+  7 resolver tests and 23 retained runtime tests. Cargo.lock contains no ARM dependency.
+- Historical GitHub main runs for 0040ee5, 0d33570 and d60d492 failed. Local success did
+  not establish CI success. Latest failed job has no steps: GitHub annotation says
+  the account is locked due to a billing issue. Hosted CI is not green.
 
-## Verified upstream
+## Runtime backlog
 
-- GitHub repository names and remote redirects verified, identities unchanged.
-- No SPL or Token-2022 deployment has been entered into the catalog yet.
-- No Subscriptions source study; SUB-0 locked.
-- Cataloger now uses solana-pubkey 4.2.0, the native address type compiled with
-  official token interfaces and Mollusk in the SDK compatibility proof.
-- This dependency change adds no deployment records or new resolution claims.
+- Slot is observed but not persisted; event identity lacks instruction position.
+- Idempotency uses signature/discriminator/raw bytes and merges identical distinct events.
+- Native u64 amounts narrow to i64; middleware tests do not exercise middleware.
+- No replay, coverage or finality; broadcast is lossy.
+- Subscriptions event decoding is hard-coded and unversioned.
+- Fix these at the runtime milestone, not in the resolver correction.
 
-## Real blockers
+## Real blocker
 
-- None for this audit. Architecture book not located; constitution supplies current requirements.
+- The owner must resolve the GitHub billing lock before hosted Actions can start.
+  No workflow or lint weakening can repair that account condition.
 
 ## Next critical path
 
-- Resolver milestone pushed at 0040ee5; next official token interface compatibility,
-  golden state fixtures and revoke round trip.
-- Record verified deployment coverage before advertising a live supported version.
-- Do not create a separate repository to compensate for historical names.
+- Complete exact local workflow checks, push the correction and verify GitHub main CI.
+- Subscriptions study is paused until Cataloger main is actually green. Study had started
+  after an incomplete SUB-0 review; no Subscriptions adapter or upstream edits were made.
+- Architecture book remains unlocated; constitution supplies current requirements.

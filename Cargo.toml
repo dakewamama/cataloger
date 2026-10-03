@@ -8,7 +8,6 @@ name = "catalyst-indexer"
 path = "src/main.rs"
 
 [dependencies]
-arm = { git = "https://github.com/dakewamama/arm", rev = "5b05e06892dcc6d20d1db7f0324030916b152d6a" }
 solana-pubkey = "=4.2.0"
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }

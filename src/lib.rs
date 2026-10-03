@@ -1,6 +1,5 @@
 //! Deterministic resolution of verified, bounded native deployment history.
 
-use arm::{Capability, NativeContext};
 use solana_pubkey::Pubkey;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,24 +29,12 @@ pub struct ProgramVersion {
     pub program_id: Pubkey,
     pub deployment: String,
     pub version: String,
-    pub start_slot: u64,
-    /// Exclusive, bounded by verified coverage. No inference about future upgrades.
-    pub end_slot: u64,
+    pub supported_from_slot: u64,
+    /// Verification boundary, not evidence that the native deployment ended here.
+    pub supported_until_slot_exclusive: u64,
     pub schema: SchemaSource,
     pub adapter: AdapterRef,
-    pub supported_semantics: Vec<Capability>,
     pub provenance: Provenance,
-}
-
-impl ProgramVersion {
-    pub fn native_context(&self) -> NativeContext {
-        NativeContext {
-            protocol: self.adapter.protocol.clone(),
-            deployment: self.deployment.clone(),
-            program_version: self.version.clone(),
-            adapter_version: self.adapter.version.clone(),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,7 +59,7 @@ pub struct Catalog {
 impl Catalog {
     pub fn new(mut versions: Vec<ProgramVersion>) -> Result<Self, Error> {
         for version in &versions {
-            if version.start_slot >= version.end_slot
+            if version.supported_from_slot >= version.supported_until_slot_exclusive
                 || [
                     &version.cluster,
                     &version.deployment,
@@ -91,26 +78,18 @@ impl Catalog {
             {
                 return Err(Error::InvalidRecord);
             }
-            if version
-                .supported_semantics
-                .iter()
-                .enumerate()
-                .any(|(i, capability)| version.supported_semantics[..i].contains(capability))
-            {
-                return Err(Error::InvalidRecord);
-            }
         }
         versions.sort_by(|left, right| {
-            (&left.cluster, left.program_id, left.start_slot).cmp(&(
+            (&left.cluster, left.program_id, left.supported_from_slot).cmp(&(
                 &right.cluster,
                 right.program_id,
-                right.start_slot,
+                right.supported_from_slot,
             ))
         });
         for pair in versions.windows(2) {
             if pair[0].cluster == pair[1].cluster
                 && pair[0].program_id == pair[1].program_id
-                && pair[0].end_slot > pair[1].start_slot
+                && pair[0].supported_until_slot_exclusive > pair[1].supported_from_slot
             {
                 return Err(Error::OverlappingHistory);
             }
@@ -130,8 +109,8 @@ impl Catalog {
             .find(|known| {
                 known.cluster == cluster
                     && &known.program_id == program_id
-                    && known.start_slot <= slot
-                    && slot < known.end_slot
+                    && known.supported_from_slot <= slot
+                    && slot < known.supported_until_slot_exclusive
                     && version.is_none_or(|requested| requested == known.version)
             })
             .ok_or(Error::UnsupportedVersion)
