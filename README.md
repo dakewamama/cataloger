@@ -1,31 +1,35 @@
 # cataloger
 
-Cataloger resolves verified deployment identity and semantic provenance. The Rust
-library is named cataloger; the existing webhook binary remains catalyst-indexer.
-The GitHub repository was renamed from catalyst-indexer, and that old URL redirects here.
+Cataloger identifies which deployment, schema and adapter interpretation is verified
+at a slot. Catalyst owns authorization semantics. The runtime joins the resolver's
+record with Catalyst and constructs the ARM context; Cataloger does not depend on ARM
+or declare which capabilities an adapter emits.
+
+The Rust library is named cataloger; the retained webhook binary is catalyst-indexer.
+The GitHub repository was renamed from catalyst-indexer, and the old URL redirects here.
 
 ## Static deployment resolver
 
-Catalog::new accepts manually verified ProgramVersion records. Each record binds a
-cluster genesis hash and native program key to a deployment/version, half-open slot
-range, schema source/revision, semantic adapter/version/source, supported ARM capabilities
-and provenance evidence. Cataloger does not discover, crawl or decode program state.
+Catalog::new accepts manually verified ProgramVersion records. Each binds a cluster
+genesis hash and program key to deployment/version, schema source/revision, adapter
+protocol/version/source and provenance evidence. Cataloger does not discover, crawl
+or decode program state.
 
-Construction rejects malformed records, duplicate capability declarations and overlapping
-history. Record order does not affect resolution. resolve checks cluster, program and slot,
-plus an optional exact version selector, and returns the original record with its provenance.
-Unknown versions, gaps, future slots and mismatched selectors return UnsupportedVersion.
+Support is bounded by the half-open interval
+[supported_from_slot, supported_until_slot_exclusive). The exclusive upper bound is a
+verification boundary, not evidence that the native deployment ended or upgraded.
+Unknown versions, unsupported slots, gaps and mismatched selectors return
+UnsupportedVersion. There is no open-ended latest-version assumption.
 
-Every range has an explicit exclusive end_slot bounded by verified observation coverage.
-There is no open-ended "latest version" assumption. Native upgrades must extend/replace
-verified catalog data; future versions are never decoded optimistically. native_context
-provides ARM provenance for Catalyst dispatch; the caller also binds the native program key.
-The caller is responsible for authenticating records and their evidence: nonempty provenance
-fields establish structural validity, not that an arbitrary input is authoritative.
+Construction rejects malformed records and overlapping support intervals. Record order
+does not affect resolution. resolve checks cluster, program, slot and an optional exact
+version selector, returning the original record with its provenance. Callers authenticate
+records and their evidence; nonempty fields establish structural validity alone.
 
-Seven synthetic resolver tests cover upgrade boundaries, gaps, version rejection,
-ambiguous history, independent cluster/program ranges, determinism and provenance.
-No live deployment is registered yet. Real SPL coverage and native fixtures are next.
+Seven synthetic resolver tests cover support boundaries, gaps, version rejection,
+ambiguous intervals, independent cluster/program ranges, determinism and provenance.
+These test the resolver algorithm, not actual deployment history. No live deployment
+is registered. Native deployment records require independently verified evidence.
 
 ```sh
 cargo fmt --check
@@ -39,8 +43,8 @@ git diff --check
 The retained binary is the previous ingestion implementation described below. It does
 not dispatch through Cataloger yet and must not be presented as a version-verified
 semantic runtime. Its existing migrations and event storage remain available for the
-runtime integration milestone. Extraction now retains transaction slot for logging;
-unused webhook index/account-list fields are ignored by Serde rather than modeled.
+runtime integration milestone. The legacy table is not a canonical observation journal. Slot is logged but not persisted;
+instruction positions are not retained. Runtime migration must preserve both.
 
 Event indexer for the [Solana Subscriptions Program](https://github.com/solana-foundation/subscriptions) (`De1egAFMkMWZSN5rYXRj9CAdheBamobVNubTsi9avR44`).
 
@@ -182,7 +186,14 @@ Helius webhook config:
 - No replay. Only captures what streams past while running. Tunnel drops, crashes, and Helius gaps leave holes with no backfill and no record that a hole exists.
 - No finality gate. A dropped or rolled back transaction leaves a stale row.
 - Helius is a single point of failure. No RPC polling fallback.
-- `amount as i64` wraps for `u64` values above `i64::MAX`. Not reachable with real token amounts, but unguarded.
+- `amount as i64` silently narrows native u64 values. Canonical storage must preserve
+  them as decimal text or fixed bytes.
+- Identity uses signature/discriminator/raw bytes, so identical events at distinct
+  instruction positions collide. Runtime identity must include instruction position.
+- Authentication tests inspect headers/environment but do not execute middleware.
+- Subscriptions event decoding is hard-coded and unversioned; retained raw event bytes
+  do not establish a replayable, versioned evidence journal.
+- Coverage gaps are not tracked.
 
 ## Status
 
