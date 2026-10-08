@@ -5,7 +5,9 @@ at a slot. Catalyst owns authorization semantics. The runtime joins the resolver
 record with Catalyst and constructs the ARM context; Cataloger does not depend on ARM
 or declare which capabilities an adapter emits.
 
-The Rust library is named cataloger; the retained webhook binary is catalyst-indexer.
+The workspace keeps the resolver in `crates/cataloger` and the retained webhook
+service in `services/catalyst-indexer`. The resolver depends only on Solana address
+types; HTTP, database and runtime dependencies belong to the service.
 The GitHub repository was renamed from catalyst-indexer, and the old URL redirects here.
 
 ## Static deployment resolver
@@ -160,7 +162,7 @@ Decoded columns are nullable since not every event type populates every field.
 
 ```bash
 cargo test
-RUST_LOG=info cargo run
+RUST_LOG=info cargo run -p catalyst-indexer
 ```
 
 `.env`:

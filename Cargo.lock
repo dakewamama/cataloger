@@ -208,12 +208,18 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 name = "cataloger"
 version = "0.1.0"
 dependencies = [
+ "solana-pubkey",
+]
+
+[[package]]
+name = "catalyst-indexer"
+version = "0.1.0"
+dependencies = [
  "axum",
  "bs58",
  "dotenvy",
  "serde",
  "serde_json",
- "solana-pubkey",
  "sqlx",
  "tokio",
  "tower 0.4.13",

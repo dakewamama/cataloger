@@ -1,0 +1,7 @@
+[package]
+name = "cataloger"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+solana-pubkey = "=4.2.0"
