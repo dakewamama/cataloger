@@ -1,0 +1,53 @@
+{
+  "client": "subscriptions:0.5.0:5a347ffaa969036061d274d3c91e0277962e2b51",
+  "program_sha256": "a59467f0b2d0a0211b06ddf9a3f3141a90eaea6faeeaa3d19541288eaa082107",
+  "source": "56de552a26a0f0af437c0ce5191b3309741cc596",
+  "token_sha256": "8190d3f7ceb6cb7a7a8d8924bff89f9f611e15ce1f806f2b6237f3311a98f697",
+  "sdk_revision": "b3682df29b3b6c64e9fcf96b35a6dd23fa552759",
+  "source_fixture": "tests/fixtures/subscriptions-lifecycle.json",
+  "source_fixture_sha256": "cda5667e1273599ebbee906b293dba2ae1f8a6f99626be961a40172a759f4b23",
+  "snapshots": [
+    {
+      "name": "owner_pull_60",
+      "position": 8,
+      "outcome": "Ok(())",
+      "clock": {
+        "epoch": 0,
+        "epoch_start_timestamp": 1800000000,
+        "leader_schedule_epoch": 0,
+        "slot": 108,
+        "unix_timestamp": 1800000000
+      },
+      "phase": "after",
+      "file": "owner-pull-60.json"
+    },
+    {
+      "name": "revoke_cancelled",
+      "position": 22,
+      "outcome": "Ok(())",
+      "clock": {
+        "epoch": 0,
+        "epoch_start_timestamp": 1800000000,
+        "leader_schedule_epoch": 0,
+        "slot": 122,
+        "unix_timestamp": 1800003600
+      },
+      "phase": "before",
+      "file": "revoke-cancelled-before.json"
+    },
+    {
+      "name": "revoke_cancelled",
+      "position": 22,
+      "outcome": "Ok(())",
+      "clock": {
+        "epoch": 0,
+        "epoch_start_timestamp": 1800000000,
+        "leader_schedule_epoch": 0,
+        "slot": 122,
+        "unix_timestamp": 1800003600
+      },
+      "phase": "after",
+      "file": "revoke-cancelled-after.json"
+    }
+  ]
+}

@@ -1,0 +1,194 @@
+[
+  {
+    "schema_version": "0.1",
+    "id": "De1egAFMkMWZSN5rYXRj9CAdheBamobVNubTsi9avR44:HwD4QpS4bsutLbWZWhbmFUZfkXC5Au1DbkzYEzjDgps8:technical:spend",
+    "subject": {
+      "kind": "identity",
+      "value": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+    },
+    "principal": {
+      "kind": "identity",
+      "value": "C6SqwcnpGmWGkM3UuWJ2w58UZvYrgUxQaAFem6wPSBW6"
+    },
+    "resource": {
+      "namespace": "solana:token-account",
+      "id": "HwD4QpS4bsutLbWZWhbmFUZfkXC5Au1DbkzYEzjDgps8"
+    },
+    "capability": "spend",
+    "constraints": {
+      "kind": "constraint",
+      "value": {
+        "kind": "amount_at_most",
+        "asset": {
+          "namespace": "solana:mint",
+          "id": "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8"
+        },
+        "amount": 18446744073709551555
+      }
+    },
+    "usage": {
+      "kind": "cumulative",
+      "remaining": 18446744073709551555
+    },
+    "lifecycle": {
+      "kind": "active",
+      "valid_from": null,
+      "valid_until": null
+    },
+    "delegability": "unknown",
+    "authority_kind": {
+      "kind": "direct"
+    },
+    "enforcement": "native",
+    "observability": "exact",
+    "evidence": {
+      "references": [
+        "fixture:subscriptions-lifecycle.json:owner_pull_60:after",
+        "fixture:subscriptions-lifecycle.json:owner_pull_60:clock"
+      ],
+      "observed_at": "fixture:slot:108"
+    },
+    "native_context": {
+      "protocol": "subscriptions",
+      "deployment": "fixture:mollusk:subscriptions:0.5.0",
+      "program_version": "sha256:a59467f0b2d0a0211b06ddf9a3f3141a90eaea6faeeaa3d19541288eaa082107",
+      "adapter_version": "0.3"
+    }
+  },
+  {
+    "schema_version": "0.1",
+    "id": "De1egAFMkMWZSN5rYXRj9CAdheBamobVNubTsi9avR44:Cpy5ZUAnt9UFD6g4jzUAQfk3AhzDVhRbo2Ye9nJYjVfv:100:spend",
+    "subject": {
+      "kind": "identity",
+      "value": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+    },
+    "principal": {
+      "kind": "any_of",
+      "value": [
+        {
+          "kind": "identity",
+          "value": "8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR"
+        },
+        {
+          "kind": "identity",
+          "value": "QWmroo4YnnMqYW3cnxWkFdaTxGD3P7vMSzwMHGbUzwF"
+        }
+      ]
+    },
+    "resource": {
+      "namespace": "solana:token-account",
+      "id": "HwD4QpS4bsutLbWZWhbmFUZfkXC5Au1DbkzYEzjDgps8"
+    },
+    "capability": "spend",
+    "constraints": {
+      "kind": "all",
+      "value": [
+        {
+          "kind": "constraint",
+          "value": {
+            "kind": "amount_at_most",
+            "asset": {
+              "namespace": "solana:mint",
+              "id": "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8"
+            },
+            "amount": 100
+          }
+        },
+        {
+          "kind": "constraint",
+          "value": {
+            "kind": "recipient",
+            "principal": {
+              "kind": "identity",
+              "value": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY"
+            }
+          }
+        }
+      ]
+    },
+    "usage": {
+      "kind": "recurring",
+      "period_seconds": 3600,
+      "anchor_unix_seconds": 1800000000,
+      "observed_period_start": 1800000000,
+      "remaining": 40
+    },
+    "lifecycle": {
+      "kind": "active",
+      "valid_from": 1800000000,
+      "valid_until": null
+    },
+    "delegability": "unknown",
+    "authority_kind": {
+      "kind": "derived",
+      "parents": [
+        "De1egAFMkMWZSN5rYXRj9CAdheBamobVNubTsi9avR44:HwD4QpS4bsutLbWZWhbmFUZfkXC5Au1DbkzYEzjDgps8:technical:spend"
+      ]
+    },
+    "enforcement": "native",
+    "observability": "exact",
+    "evidence": {
+      "references": [
+        "fixture:subscriptions-lifecycle.json:owner_pull_60:after",
+        "fixture:subscriptions-lifecycle.json:owner_pull_60:clock"
+      ],
+      "observed_at": "fixture:slot:108"
+    },
+    "native_context": {
+      "protocol": "subscriptions",
+      "deployment": "fixture:mollusk:subscriptions:0.5.0",
+      "program_version": "sha256:a59467f0b2d0a0211b06ddf9a3f3141a90eaea6faeeaa3d19541288eaa082107",
+      "adapter_version": "0.3"
+    }
+  },
+  {
+    "schema_version": "0.1",
+    "id": "De1egAFMkMWZSN5rYXRj9CAdheBamobVNubTsi9avR44:3DztDM68WwtEuWfnPeP4CsEijJaX1tp5x9YszSsSguvJ:1800000000:modify-authority",
+    "subject": {
+      "kind": "resource",
+      "value": {
+        "namespace": "solana:authority-set",
+        "id": "3DztDM68WwtEuWfnPeP4CsEijJaX1tp5x9YszSsSguvJ"
+      }
+    },
+    "principal": {
+      "kind": "identity",
+      "value": "8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR"
+    },
+    "resource": {
+      "namespace": "solana:authority-set",
+      "id": "3DztDM68WwtEuWfnPeP4CsEijJaX1tp5x9YszSsSguvJ"
+    },
+    "capability": "modify_authority",
+    "constraints": {
+      "kind": "true"
+    },
+    "usage": {
+      "kind": "unlimited"
+    },
+    "lifecycle": {
+      "kind": "active",
+      "valid_from": null,
+      "valid_until": null
+    },
+    "delegability": "unknown",
+    "authority_kind": {
+      "kind": "administrative"
+    },
+    "enforcement": "native",
+    "observability": "partial",
+    "evidence": {
+      "references": [
+        "fixture:subscriptions-lifecycle.json:owner_pull_60:after",
+        "fixture:subscriptions-lifecycle.json:owner_pull_60:clock"
+      ],
+      "observed_at": "fixture:slot:108"
+    },
+    "native_context": {
+      "protocol": "subscriptions",
+      "deployment": "fixture:mollusk:subscriptions:0.5.0",
+      "program_version": "sha256:a59467f0b2d0a0211b06ddf9a3f3141a90eaea6faeeaa3d19541288eaa082107",
+      "adapter_version": "0.3"
+    }
+  }
+]

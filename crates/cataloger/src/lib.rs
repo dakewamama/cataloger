@@ -1,28 +1,33 @@
 //! Deterministic resolution of verified, bounded native deployment history.
 
+use serde::{Deserialize, Serialize};
 use solana_pubkey::Pubkey;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SchemaSource {
     pub uri: String,
     pub revision: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdapterRef {
     pub protocol: String,
     pub version: String,
     pub source: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Provenance {
     pub source: String,
     pub revision: String,
     pub evidence_reference: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProgramVersion {
     /// Genesis hash, rather than a mutable provider label such as "mainnet".
     pub cluster: String,

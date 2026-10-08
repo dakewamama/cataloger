@@ -6,8 +6,8 @@ record with Catalyst and constructs the ARM context; Cataloger does not depend o
 or declare which capabilities an adapter emits.
 
 The workspace keeps the resolver in `crates/cataloger` and the retained webhook
-service in `services/catalyst-indexer`. The resolver depends only on Solana address
-types; HTTP, database and runtime dependencies belong to the service.
+service in `services/catalyst-indexer`. The resolver uses Solana address types and
+serialization; HTTP, database and runtime dependencies belong to the service.
 The GitHub repository was renamed from catalyst-indexer, and the old URL redirects here.
 
 ## Static deployment resolver
@@ -39,6 +39,51 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 git diff --check
 ```
+
+## Snapshot authorization API
+
+`authorization-api` imports one bank's observed accounts, resolves verified program
+versions through Cataloger and compiles them through Catalyst into ARM. Supported
+targets are classic SPL delegates and fixed, recurring or plan-backed Subscriptions
+delegations. An explicitly observed closed SPL account compiles to no delegate;
+an omitted account remains insufficient evidence. The service uses the official
+token account decoder and native Solana account serialization.
+
+Each immutable journal record retains raw accounts, cluster/bank identity, slot,
+clock, target scope, resolved schema/adapter provenance, SDK revision and projection.
+SQLite stores the record as JSON text, preserving native `u64` values without a
+signed integer cast. Account and target ordering does not affect its content hash.
+Duplicate ingestion is idempotent; a conflicting interpretation cannot overwrite
+the record. Replay uses the retained resolver records and must reproduce the
+original projection. Record checksums are verified before reads. Unknown versions,
+missing evidence and malformed native state remain distinct stored outcomes.
+
+```sh
+export DATABASE_URL=sqlite:///absolute/path/authorizations.db
+cargo run -p catalyst-indexer --bin authorization-api -- import CATALOG.json SNAPSHOT.json
+cargo run -p catalyst-indexer --bin authorization-api -- replay SNAPSHOT_ID
+cargo run -p catalyst-indexer --bin authorization-api -- serve 127.0.0.1:3001
+```
+
+The catalog file is an array of manually verified `ProgramVersion` records. Its
+publisher must authenticate deployment evidence; structural validation alone does
+not establish provenance. The snapshot supplies all accounts from one coherent
+bank, its clock and the targets to interpret. A removed account must be observed
+explicitly; a missing account is insufficient evidence.
+
+`GET /snapshots/{id}` returns retained evidence and its projection.
+`GET /snapshots/{id}/authorizations/{address}` selects records that mention the
+address as principal, subject or resource. Compound principals remain intact;
+membership does not imply independent authority. Invalid addresses return 400,
+unknown snapshots 404 and storage failures 500.
+
+Responses expose the state hash, observation position, exact versions and incomplete
+coverage. An empty result does not establish that an address has no authorization.
+These are historical snapshots, not a merged current-state view. Native fixture
+deployments cannot be used to interpret finalized live observations. No live
+deployment is registered. Live ingestion, finality tracking, repair and complete
+address coverage require their own verified evidence. ARM amounts remain integer
+base units; clients must preserve their full 64-bit range.
 
 ## Existing observation service
 

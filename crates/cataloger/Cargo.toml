@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-solana-pubkey = "=4.2.0"
+solana-pubkey = { version = "=4.2.0", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }

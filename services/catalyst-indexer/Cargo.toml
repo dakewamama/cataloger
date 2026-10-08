@@ -2,12 +2,21 @@
 name = "catalyst-indexer"
 version = "0.1.0"
 edition = "2024"
+default-run = "catalyst-indexer"
 
 [[bin]]
 name = "catalyst-indexer"
 path = "src/main.rs"
 
 [dependencies]
+cataloger = { path = "../../crates/cataloger" }
+catalyst-sdk = { git = "https://github.com/dakewamama/catalyst-sdk", rev = "f6f47781e53a9995a15882e626adea1fcdd69d44" }
+arm = { git = "https://github.com/dakewamama/arm", rev = "3b91100314473b616b5fd6f77214c6b6282a1dfb" }
+solana-account = { version = "=4.3.1", features = ["serde"] }
+solana-pubkey = { version = "=4.2.0", features = ["serde"] }
+solana-program-pack = "=3.1.0"
+spl-token-interface = "=3.0.0"
+sha2 = "0.10"
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

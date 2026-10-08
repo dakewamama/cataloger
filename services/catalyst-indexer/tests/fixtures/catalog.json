@@ -1,0 +1,112 @@
+[
+  {
+    "cluster": "local:mollusk-fixtures",
+    "program_id": [
+      6,
+      221,
+      246,
+      225,
+      215,
+      101,
+      161,
+      147,
+      217,
+      203,
+      225,
+      70,
+      206,
+      235,
+      121,
+      172,
+      28,
+      180,
+      133,
+      237,
+      95,
+      91,
+      55,
+      145,
+      58,
+      140,
+      245,
+      133,
+      126,
+      255,
+      0,
+      169
+    ],
+    "deployment": "fixture:mollusk:token:0.15.1",
+    "version": "sha256:8190d3f7ceb6cb7a7a8d8924bff89f9f611e15ce1f806f2b6237f3311a98f697",
+    "supported_from_slot": 1,
+    "supported_until_slot_exclusive": 123,
+    "schema": {
+      "uri": "https://docs.rs/spl-token-interface/3.0.0",
+      "revision": "3.0.0"
+    },
+    "adapter": {
+      "protocol": "spl-token",
+      "version": "0.1",
+      "source": "https://github.com/dakewamama/catalyst-sdk/blob/f6f47781e53a9995a15882e626adea1fcdd69d44/src/spl.rs"
+    },
+    "provenance": {
+      "source": "https://github.com/dakewamama/catalyst-sdk/blob/b3682df29b3b6c64e9fcf96b35a6dd23fa552759/tests/fixtures/spl-delegate.bin",
+      "revision": "b3682df29b3b6c64e9fcf96b35a6dd23fa552759",
+      "evidence_reference": "fixture:spl-delegate.bin:sha256:f5cfe08fa28ea703b5895b36d519811a0ff7f55b5728e4e550741a882bbb66f5"
+    }
+  },
+  {
+    "cluster": "local:mollusk-fixtures",
+    "program_id": [
+      187,
+      199,
+      119,
+      175,
+      186,
+      104,
+      240,
+      18,
+      62,
+      192,
+      196,
+      209,
+      183,
+      238,
+      137,
+      110,
+      147,
+      1,
+      201,
+      41,
+      197,
+      90,
+      6,
+      186,
+      149,
+      24,
+      33,
+      88,
+      37,
+      140,
+      21,
+      169
+    ],
+    "deployment": "fixture:mollusk:subscriptions:0.5.0",
+    "version": "sha256:a59467f0b2d0a0211b06ddf9a3f3141a90eaea6faeeaa3d19541288eaa082107",
+    "supported_from_slot": 100,
+    "supported_until_slot_exclusive": 123,
+    "schema": {
+      "uri": "https://docs.rs/subscriptions/0.5.0",
+      "revision": "0.5.0"
+    },
+    "adapter": {
+      "protocol": "subscriptions",
+      "version": "0.3",
+      "source": "https://github.com/dakewamama/catalyst-sdk/blob/f6f47781e53a9995a15882e626adea1fcdd69d44/src/subscriptions.rs"
+    },
+    "provenance": {
+      "source": "https://github.com/dakewamama/catalyst-sdk/blob/b3682df29b3b6c64e9fcf96b35a6dd23fa552759/tests/fixtures/subscriptions-lifecycle.json",
+      "revision": "b3682df29b3b6c64e9fcf96b35a6dd23fa552759",
+      "evidence_reference": "fixture:subscriptions-lifecycle.json:sha256:cda5667e1273599ebbee906b293dba2ae1f8a6f99626be961a40172a759f4b23"
+    }
+  }
+]
