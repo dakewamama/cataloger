@@ -55,3 +55,12 @@
   [official deployment documentation](https://solana.com/docs/core/programs/program-deployment).
 - Finality and account authenticity are RPC trust assumptions. A response supplies
   neither a bank hash nor a cryptographic state proof. No source copied.
+
+## SQLite checkpoint index
+
+- Existing dependency: SQLx 0.7.4 and its locked SQLite library. Inspection:
+  TARGETED SOURCE of SQLx migrations, plus native journal integration tests.
+- [SQLite comparison rules](https://www.sqlite.org/datatype3.html#sort_order)
+  order fixed-width BLOBs bytewise. Big-endian slot bytes preserve unsigned
+  positions; an index over immutable rows avoids a separate mutable head table.
+- Reuse: DEPEND / PUBLIC API. No source copied.

@@ -35,6 +35,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         [command, id] if command == "replay" => {
             println!("{}", serde_json::to_string(&journal.replay(id).await?)?);
         }
+        [command, id] if command == "latest" => {
+            let record = journal
+                .get(id)
+                .await?
+                .ok_or(catalyst_indexer::Error::NotFound)?;
+            let scope_id = record.snapshot.scope_id()?;
+            let current = journal
+                .latest(&scope_id)
+                .await?
+                .ok_or(catalyst_indexer::Error::NotFound)?;
+            println!(
+                "{}",
+                serde_json::json!({"scope_id": scope_id, "record": current})
+            );
+        }
         [command, address] if command == "serve" => {
             let listener = tokio::net::TcpListener::bind(address).await?;
             axum::serve(listener, router(journal))
@@ -45,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: authorization-api observe CATALOG SCOPE | import CATALOG SNAPSHOT | replay ID | serve ADDRESS"
+                "usage: authorization-api observe CATALOG SCOPE | import CATALOG SNAPSHOT | replay ID | latest ID | serve ADDRESS"
                     .into(),
             );
         }

@@ -75,6 +75,20 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    pub fn scope_id(&self) -> Result<String, Error> {
+        let mut targets: Vec<_> = self.targets.iter().map(Target::key).collect();
+        targets.sort();
+        Ok(format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(
+                "catalyst-indexer:scope:0.1",
+                &self.observation.cluster,
+                &self.observation.origin,
+                targets,
+            ))?)
+        ))
+    }
+
     fn normalize(&mut self) -> Result<(), Error> {
         if self.observation.cluster.is_empty()
             || self.observation.bank.is_empty()
@@ -299,6 +313,7 @@ pub enum Error {
     Json(serde_json::Error),
     InvalidSnapshot,
     Conflict,
+    AmbiguousScope,
     ReplayMismatch,
     NotFound,
     InvalidObservation(&'static str),
@@ -362,7 +377,24 @@ impl Journal {
             .run(&database)
             .await
             .map_err(sqlx::Error::from)?;
-        Ok(Self { database })
+        let journal = Self { database };
+        let pending: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM authority_snapshots WHERE scope_id IS NULL")
+                .fetch_all(&journal.database)
+                .await?;
+        for id in pending {
+            let record = journal.get(&id).await?.ok_or(Error::ReplayMismatch)?;
+            let scope_id = record.snapshot.scope_id()?;
+            sqlx::query(
+                "UPDATE authority_snapshots SET scope_id = ?, observed_slot = ? WHERE id = ?",
+            )
+            .bind(&scope_id)
+            .bind(record.snapshot.observation.slot.to_be_bytes().to_vec())
+            .bind(&id)
+            .execute(&journal.database)
+            .await?;
+        }
+        Ok(journal)
     }
 
     pub async fn ingest(&self, mut snapshot: Snapshot, catalog: &Catalog) -> Result<Record, Error> {
@@ -379,12 +411,16 @@ impl Journal {
             sdk_revision: SDK_REVISION.into(),
         };
         let raw = serde_json::to_string(&record)?;
+        let scope_id = record.snapshot.scope_id()?;
         let inserted = sqlx::query(
-            "INSERT INTO authority_snapshots (id, record, record_sha256) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING",
+            "INSERT INTO authority_snapshots (id, record, record_sha256, scope_id, observed_slot)
+             VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
         )
         .bind(&record.id)
         .bind(&raw)
         .bind(format!("{:x}", Sha256::digest(raw.as_bytes())))
+        .bind(&scope_id)
+        .bind(record.snapshot.observation.slot.to_be_bytes().to_vec())
         .execute(&self.database)
         .await?
         .rows_affected();
@@ -417,6 +453,33 @@ impl Journal {
             return Err(Error::ReplayMismatch);
         }
         Ok(Some(record))
+    }
+
+    pub async fn latest(&self, scope_id: &str) -> Result<Option<Record>, Error> {
+        let heads: Vec<(String, Vec<u8>)> = sqlx::query_as(
+            "SELECT id, observed_slot FROM authority_snapshots WHERE scope_id = ?
+             ORDER BY observed_slot DESC, id LIMIT 2",
+        )
+        .bind(scope_id)
+        .fetch_all(&self.database)
+        .await?;
+        let Some((_, slot)) = heads.first() else {
+            return Ok(None);
+        };
+        // Distinct observations at the same slot cannot be ordered by arrival.
+        let ambiguous = heads.get(1).is_some_and(|(_, previous)| previous == slot);
+        for (id, slot) in heads {
+            let record = self.get(&id).await?.ok_or(Error::ReplayMismatch)?;
+            if record.snapshot.scope_id()? != scope_id
+                || record.snapshot.observation.slot.to_be_bytes().as_slice() != slot.as_slice()
+            {
+                return Err(Error::ReplayMismatch);
+            }
+            if !ambiguous {
+                return Ok(Some(record));
+            }
+        }
+        Err(Error::AmbiguousScope)
     }
 
     pub async fn replay(&self, id: &str) -> Result<Record, Error> {
@@ -496,16 +559,20 @@ async fn authorizations(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(authorization_view(record, &address)))
+}
+
+fn authorization_view(record: Record, address: &str) -> AuthorizationView {
     let projection = match record.projection {
         Projection::Compiled { authorizations } => Projection::Compiled {
             authorizations: authorizations
                 .into_iter()
-                .filter(|authorization| mentions(authorization, &address))
+                .filter(|authorization| mentions(authorization, address))
                 .collect(),
         },
         projection => projection,
     };
-    Ok(Json(AuthorizationView {
+    AuthorizationView {
         state_version: record.id,
         observation: record.snapshot.observation,
         coverage: Coverage {
@@ -523,7 +590,42 @@ async fn authorizations(
         runtime_version: record.runtime_version,
         sdk_revision: record.sdk_revision,
         arm_schema_version: arm::SCHEMA_VERSION,
-    }))
+    }
+}
+
+fn scope_error(error: Error) -> StatusCode {
+    match error {
+        Error::AmbiguousScope => StatusCode::CONFLICT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn current_snapshot(
+    State(journal): State<Journal>,
+    Path(scope_id): Path<String>,
+) -> Result<Json<Record>, StatusCode> {
+    journal
+        .latest(&scope_id)
+        .await
+        .map_err(scope_error)?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn current_authorizations(
+    State(journal): State<Journal>,
+    Path((scope_id, address)): Path<(String, String)>,
+) -> Result<Json<AuthorizationView>, StatusCode> {
+    let address = address
+        .parse::<Pubkey>()
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .to_string();
+    let record = journal
+        .latest(&scope_id)
+        .await
+        .map_err(scope_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(authorization_view(record, &address)))
 }
 
 pub fn router(journal: Journal) -> Router {
@@ -532,6 +634,11 @@ pub fn router(journal: Journal) -> Router {
         .route(
             "/snapshots/:id/authorizations/:address",
             get(authorizations),
+        )
+        .route("/scopes/:scope_id", get(current_snapshot))
+        .route(
+            "/scopes/:scope_id/authorizations/:address",
+            get(current_authorizations),
         )
         .with_state(journal)
 }

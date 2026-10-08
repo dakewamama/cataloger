@@ -64,6 +64,7 @@ export DATABASE_URL=sqlite:///absolute/path/authorizations.db
 cargo run -p catalyst-indexer --bin authorization-api -- import CATALOG.json SNAPSHOT.json
 cargo run -p catalyst-indexer --bin authorization-api -- observe CATALOG.json SCOPE.json
 cargo run -p catalyst-indexer --bin authorization-api -- replay SNAPSHOT_ID
+cargo run -p catalyst-indexer --bin authorization-api -- latest SNAPSHOT_ID
 cargo run -p catalyst-indexer --bin authorization-api -- serve 127.0.0.1:3001
 ```
 
@@ -94,14 +95,35 @@ address as principal, subject or resource. Compound principals remain intact;
 membership does not imply independent authority. Invalid addresses return 400,
 unknown snapshots 404 and storage failures 500.
 
+`latest SNAPSHOT_ID` prints the scope ID and its newest observed record. Scope identity
+binds the cluster, fixture/finalized origin and sorted logical target identities.
+Changing witnesses or a target's secondary selectors preserves the scope, so loss of
+evidence cannot leave an older grant selected. Adding or removing targets creates a
+different scope; clients must follow their intended scope explicitly.
+
+`GET /scopes/{scope_id}` returns that scope's newest observed record.
+`GET /scopes/{scope_id}/authorizations/{address}` filters that record by address.
+Selection uses slot before projection status or address filtering: newer unsupported,
+incomplete or invalid state replaces an older successful projection. Older arrivals
+cannot regress the checkpoint. Distinct observations at the newest slot return 409;
+duplicates cannot clear that ambiguity. A strictly newer observation resolves it.
+Historical records remain accessible without combining accounts from different banks.
+
+The checkpoint is an index over immutable records, with fixed-width big-endian slot
+bytes preserving unsigned `u64` ordering. Startup backfills older journal metadata
+from checksum-verified records without rewriting their raw evidence. Journal and
+position are inserted in one atomic statement. Older writers that omit the metadata
+are rejected; use the updated binary for all writers after migrating the database.
+
 Responses expose the state hash, observation position, exact versions and incomplete
 coverage. An empty result does not establish that an address has no authorization.
-These are historical snapshots, not a merged current-state view. Native fixture
+Current scope endpoints describe the latest observed slot, with no claim about
+unobserved changes since that slot or completeness across scopes. Native fixture
 deployments cannot interpret finalized live observations. Classic SPL's observed
 deployment matches the tested ELF; Subscriptions and Token-2022 live versions remain
 unsupported. The retained mainnet capture proves a null source account and verified
 SPL identity at one bank, not a live delegate grant or complete address coverage.
-Continuous ingestion, checkpoints, repair and complete address coverage remain
+Continuous ingestion, repair and complete address coverage remain
 outstanding. ARM amounts remain integer base units; clients must preserve 64-bit values.
 
 Finalized commitment and account authenticity rely on the chosen RPC provider. The
@@ -110,6 +132,10 @@ or state proof. Support intervals remain verification boundaries. Raw unsupporte
 observations are retained; a newly verified catalog requires a fresh observation
 rather than overwriting an immutable historical interpretation. Replay requires
 the recorded SDK revision; upgrading the runtime cannot silently reinterpret history.
+Import and library ingestion are trusted operator interfaces, not public write APIs.
+A finalized import must come from an authentic, coherent bank capture with truthful
+position metadata. Account bytes alone cannot authenticate its slot or finality;
+the collector obtains those facts from its configured RPC provider.
 
 ## Existing observation service
 
