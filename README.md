@@ -30,8 +30,9 @@ records and their evidence; nonempty fields establish structural validity alone.
 
 Seven synthetic resolver tests cover support boundaries, gaps, version rejection,
 ambiguous intervals, independent cluster/program ranges, determinism and provenance.
-These test the resolver algorithm, not actual deployment history. No live deployment
-is registered. Native deployment records require independently verified evidence.
+These test the resolver algorithm. The runtime also checks a real finalized mainnet
+SPL observation against its complete program bytes; support remains bounded to
+verified records and every live projection revalidates its deployment evidence.
 
 ```sh
 cargo fmt --check
@@ -61,6 +62,7 @@ missing evidence and malformed native state remain distinct stored outcomes.
 ```sh
 export DATABASE_URL=sqlite:///absolute/path/authorizations.db
 cargo run -p catalyst-indexer --bin authorization-api -- import CATALOG.json SNAPSHOT.json
+cargo run -p catalyst-indexer --bin authorization-api -- observe CATALOG.json SCOPE.json
 cargo run -p catalyst-indexer --bin authorization-api -- replay SNAPSHOT_ID
 cargo run -p catalyst-indexer --bin authorization-api -- serve 127.0.0.1:3001
 ```
@@ -71,6 +73,21 @@ not establish provenance. The snapshot supplies all accounts from one coherent
 bank, its clock and the targets to interpret. A removed account must be observed
 explicitly; a missing account is insufficient evidence.
 
+`observe` uses the official Agave RPC client and `RPC_URL`. Its scope supplies the
+expected cluster genesis hash, target selectors, account witnesses and optional
+`min_context_slot`. It adds each target's primary accounts, Clock, program and
+ProgramData addresses, then reads the entire set with one finalized, unsliced
+`getMultipleAccounts` request. A scope exceeding 100 accounts is rejected rather
+than split across banks. Dependency discovery can precede this request; discovery
+reads must not be mixed into its result. Missing witnesses remain incomplete.
+
+An explicit RPC `null` becomes the native empty account; malformed encoded accounts,
+short responses and inconsistent clocks fail collection. Live interpretation checks
+loader ownership, executable state, canonical ProgramData linkage, active deployment
+slot and the full payload hash against the catalog record. Fixture labels, unknown
+code or unsupported slots cannot become supported live projections. Clock supplies
+the bank's timestamp, not local wall time or a separate block-time request.
+
 `GET /snapshots/{id}` returns retained evidence and its projection.
 `GET /snapshots/{id}/authorizations/{address}` selects records that mention the
 address as principal, subject or resource. Compound principals remain intact;
@@ -80,10 +97,19 @@ unknown snapshots 404 and storage failures 500.
 Responses expose the state hash, observation position, exact versions and incomplete
 coverage. An empty result does not establish that an address has no authorization.
 These are historical snapshots, not a merged current-state view. Native fixture
-deployments cannot be used to interpret finalized live observations. No live
-deployment is registered. Live ingestion, finality tracking, repair and complete
-address coverage require their own verified evidence. ARM amounts remain integer
-base units; clients must preserve their full 64-bit range.
+deployments cannot interpret finalized live observations. Classic SPL's observed
+deployment matches the tested ELF; Subscriptions and Token-2022 live versions remain
+unsupported. The retained mainnet capture proves a null source account and verified
+SPL identity at one bank, not a live delegate grant or complete address coverage.
+Continuous ingestion, checkpoints, repair and complete address coverage remain
+outstanding. ARM amounts remain integer base units; clients must preserve 64-bit values.
+
+Finalized commitment and account authenticity rely on the chosen RPC provider. The
+`rpc:finalized:SLOT` bank label identifies its context, not a cryptographic bank hash
+or state proof. Support intervals remain verification boundaries. Raw unsupported
+observations are retained; a newly verified catalog requires a fresh observation
+rather than overwriting an immutable historical interpretation. Replay requires
+the recorded SDK revision; upgrading the runtime cannot silently reinterpret history.
 
 ## Existing observation service
 

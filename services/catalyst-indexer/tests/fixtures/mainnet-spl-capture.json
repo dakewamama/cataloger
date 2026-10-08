@@ -1,0 +1,12 @@
+{
+  "rpc": "https://api.mainnet-beta.solana.com",
+  "cluster": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "keys": [
+    "3gvYRKWyXRR9xKWe1ZjPhLY5ZJRN7KDB4rFZFGoJfFk2",
+    "HwD4QpS4bsutLbWZWhbmFUZfkXC5Au1DbkzYEzjDgps8",
+    "SysvarC1ock11111111111111111111111111111111",
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+  ],
+  "source": "HwD4QpS4bsutLbWZWhbmFUZfkXC5Au1DbkzYEzjDgps8",
+  "response_sha256": "68ffbb2b01685f3bdadf174780681fb4dac9355b58282a09d145ff8f5acd1b0e"
+}

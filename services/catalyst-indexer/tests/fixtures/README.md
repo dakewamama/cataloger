@@ -12,7 +12,7 @@ Source: https://github.com/dakewamama/catalyst-sdk/tree/b3682df29b3b6c64e9fcf96b
 | `subscriptions-plan-arm.json` | `f039cd349d944b9a05851cd9210337ea3893f0db2c95cab77e3272c4b62d80cf` |
 
 Catalog adapter-source URLs identify the executed SDK implementation at
-`f6f47781e53a9995a15882e626adea1fcdd69d44`. Fixture provenance remains at
+`db2e41047854022a0c9a998e66fd6edbfe89dfa5`. Fixture provenance remains at
 `b3682df29b3b6c64e9fcf96b35a6dd23fa552759`; the raw accounts are unchanged.
 
 `spl-delegate.bin`, `spl-delegate.json`, and `subscriptions-plan-arm.json` are
@@ -54,3 +54,25 @@ where the upstream fixture omitted it. Tests consume these exact files and
 `catalog.json`. `spl-snapshot.json` wraps the unaltered SPL binary with the SDK
 account envelope above. Both subscription targets at slot 108 can be selected
 using the two plan/delegation pairs present in `owner-pull-60.json`.
+
+## Finalized mainnet capture
+
+`mainnet-spl-response.json` is the complete, unmodified JSON-RPC response from
+`getMultipleAccounts` against `https://api.mainnet-beta.solana.com` on October 8,
+2026, with finalized commitment and unsliced Base64 data. SHA256:
+`68ffbb2b01685f3bdadf174780681fb4dac9355b58282a09d145ff8f5acd1b0e`.
+`mainnet-spl-capture.json` records the genesis hash and exact request address order.
+Tests remap values into the collector's sorted request order without changing native bytes.
+
+Context slot is `454547887`. The Clock account comes from this same response.
+SPL ProgramData `3gvYRKWyXRR9xKWe1ZjPhLY5ZJRN7KDB4rFZFGoJfFk2` records deployment
+slot `419472000` and no upgrade authority. The complete 108600-byte payload has
+SHA256 `8190d3f7ceb6cb7a7a8d8924bff89f9f611e15ce1f806f2b6237f3311a98f697`, exactly
+the tested Mollusk ELF. The test catalog supports only the observed slot; it does
+not claim historical deployment coverage or future support.
+
+Source `HwD4QpS4bsutLbWZWhbmFUZfkXC5Au1DbkzYEzjDgps8` returns native RPC `null`.
+This is an actual absence observation, not a fabricated live token/delegate grant.
+Mutation cases explicitly alter this capture to test rejection of changed code,
+loader metadata, malformed responses and missing evidence. Native delegate/revoke
+behavior remains proven by the SDK's separate executable fixtures.

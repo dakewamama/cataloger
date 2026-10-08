@@ -20,7 +20,9 @@ use std::{
     time::Duration,
 };
 
-pub const SDK_REVISION: &str = "f6f47781e53a9995a15882e626adea1fcdd69d44";
+pub mod rpc;
+
+pub const SDK_REVISION: &str = "db2e41047854022a0c9a998e66fd6edbfe89dfa5";
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,9 +145,12 @@ fn context(
     if !versions.contains(record) {
         versions.push(record.clone());
     }
-    // Current adapters are verified against local ELFs, not a finalized live deployment.
+    // Fixture identities cannot substitute for an observed live deployment.
     if observed.origin == Origin::Finalized && record.deployment.starts_with("fixture:") {
         return Err(sdk::Error::UnsupportedVersion);
+    }
+    if observed.origin == Origin::Finalized {
+        rpc::verify_program(snapshot, record)?;
     }
     Ok(Context {
         program_id,
@@ -296,6 +301,8 @@ pub enum Error {
     Conflict,
     ReplayMismatch,
     NotFound,
+    InvalidObservation(&'static str),
+    Rpc(Box<solana_rpc_client_api::client_error::Error>),
 }
 
 impl std::fmt::Display for Error {
@@ -303,6 +310,8 @@ impl std::fmt::Display for Error {
         match self {
             Self::Database(error) => error.fmt(f),
             Self::Json(error) => error.fmt(f),
+            Self::Rpc(error) => error.fmt(f),
+            Self::InvalidObservation(reason) => write!(f, "Invalid observation: {reason}"),
             _ => write!(f, "{self:?}"),
         }
     }
@@ -319,6 +328,20 @@ impl From<sqlx::Error> for Error {
 impl From<serde_json::Error> for Error {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
+    }
+}
+
+impl From<solana_rpc_client_api::client_error::Error> for Error {
+    fn from(error: solana_rpc_client_api::client_error::Error) -> Self {
+        use solana_rpc_client_api::client_error::{Error as ClientError, ErrorKind};
+        let kind = match *error.kind {
+            ErrorKind::Reqwest(error) => ErrorKind::Reqwest(error.without_url()),
+            kind => kind,
+        };
+        Self::Rpc(Box::new(ClientError {
+            request: error.request,
+            kind: Box::new(kind),
+        }))
     }
 }
 
