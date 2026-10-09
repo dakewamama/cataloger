@@ -1,5 +1,5 @@
 use cataloger::{Catalog, ProgramVersion};
-use catalyst_indexer::rpc::{Scope, observe};
+use catalyst_indexer::rpc::{Scope, observe, simulate_revoke};
 use catalyst_indexer::{Journal, Snapshot, router};
 use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -35,6 +35,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         [command, id] if command == "replay" => {
             println!("{}", serde_json::to_string(&journal.replay(id).await?)?);
         }
+        [command, id, source] if command == "simulate-revoke" => {
+            let client = RpcClient::new_with_timeout_and_commitment(
+                std::env::var("RPC_URL")?,
+                Duration::from_secs(30),
+                CommitmentConfig::finalized(),
+            );
+            let result = simulate_revoke(&client, &journal, id, source.parse()?).await?;
+            println!("{}", serde_json::to_string(&result)?);
+        }
         [command, id] if command == "latest" => {
             let record = journal
                 .get(id)
@@ -60,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: authorization-api observe CATALOG SCOPE | import CATALOG SNAPSHOT | replay ID | latest ID | serve ADDRESS"
+                "usage: authorization-api observe CATALOG SCOPE | import CATALOG SNAPSHOT | replay ID | simulate-revoke ID SOURCE | latest ID | serve ADDRESS"
                     .into(),
             );
         }

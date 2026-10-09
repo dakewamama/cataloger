@@ -442,6 +442,7 @@ version = "0.1.0"
 dependencies = [
  "arm",
  "axum",
+ "base64 0.22.1",
  "bincode",
  "bs58",
  "cataloger",
@@ -460,6 +461,7 @@ dependencies = [
  "solana-rpc-client",
  "solana-rpc-client-api",
  "solana-sdk-ids",
+ "solana-transaction",
  "spl-token-interface",
  "sqlx",
  "tokio",
@@ -471,7 +473,7 @@ dependencies = [
 [[package]]
 name = "catalyst-sdk"
 version = "0.1.0"
-source = "git+https://github.com/dakewamama/catalyst-sdk?rev=0bfb3f57c2b4b9c22cf41d582573e8e60352be05#0bfb3f57c2b4b9c22cf41d582573e8e60352be05"
+source = "git+https://github.com/dakewamama/catalyst-sdk?rev=54ed06aa3a7c8a31268dface42d0bf27ca4adaee#54ed06aa3a7c8a31268dface42d0bf27ca4adaee"
 dependencies = [
  "arm",
  "solana-account 4.3.1",

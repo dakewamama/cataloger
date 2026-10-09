@@ -12,7 +12,7 @@ Source: https://github.com/dakewamama/catalyst-sdk/tree/b3682df29b3b6c64e9fcf96b
 | `subscriptions-plan-arm.json` | `f039cd349d944b9a05851cd9210337ea3893f0db2c95cab77e3272c4b62d80cf` |
 
 Catalog adapter-source URLs identify the executed SDK implementation at
-`0bfb3f57c2b4b9c22cf41d582573e8e60352be05`. Fixture provenance remains at
+`54ed06aa3a7c8a31268dface42d0bf27ca4adaee`. Fixture provenance remains at
 `b3682df29b3b6c64e9fcf96b35a6dd23fa552759`; the raw accounts are unchanged.
 
 `spl-delegate.bin`, `spl-delegate.json`, and `subscriptions-plan-arm.json` are
@@ -98,3 +98,42 @@ does not establish a grant: dispatch reaches missing-state handling and stores
 Incomplete. Changed payloads fail before native grant decoding; missing ProgramData
 or Clock remains incomplete. Catalog intervals cover only the captured slot.
 Native authority/control behavior is separately executed in SDK `0bfb3f5`.
+
+## Native revoke output
+
+`spl-revoke-after.bin` is the full 165-byte account data returned by canonical
+SPL Revoke executed with Mollusk 0.15.1's atomic transaction API. Input data is
+the unchanged `spl-delegate.bin` above; source is `[1;32]`, owner `[4;32]`,
+with account envelopes matching `spl-snapshot.json`. No output bytes were edited.
+SHA256 is `e1e671510fa14513936cbe2a11505c6c53504fd91422ae7a1249da5aebb0d129`.
+The executable's full SHA256 is `8190d3f7ceb6cb7a7a8d8924bff89f9f611e15ce1f806f2b6237f3311a98f697`.
+Reproduction: the SDK's `tests/spl.rs::native_revoke_round_trip` at `54ed06a`
+uses this same input and instruction through `process_transaction_instructions`.
+
+Simulation transport tests join native fixture accounts to the captured mainnet
+program/ProgramData and Clock to exercise validation. This combination is an
+explicit test fixture, not a coherent live capture or a live delegate claim.
+RPC envelopes, clocks and failure cases are deliberate test constructions.
+The loopback CLI test inspects the actual encoded unsigned transaction/configuration
+and verifies that simulation leaves finalized journal state unchanged.
+
+`spl-revoke-rpc.json` retains decoded input envelopes and the native response from
+Agave 3.1.10 at finalized local slot `419472002`, genesis
+`goeVyofiTSYtn1D32hdxfDbeBQvW5Poa4pNhGncUR9E`. Fixture SHA256:
+`f594da805e10eabd726d9cb4d48e1a2f8e87514fcb4b005cbd0392926b02c39f`.
+Only ProgramData's data is omitted to avoid duplicating the existing full capture;
+the test restores it unchanged from `mainnet-spl-response.json`. All envelopes,
+Clock and simulated output remain as decoded by the maintained RPC client.
+The owner envelope includes the local validator's genesis funding and simulated fee.
+These are local fixture accounts, not a public cluster grant or a signed transaction.
+
+Reproduction: import the captured SPL program and ProgramData with the native
+source/owner envelopes using `solana-test-validator --account-dir`, warp to the
+ProgramData deployment slot `419472000`, then wait for a finalized descendant.
+Observe the singleton SPL scope with a catalog interval covering that bank, and run
+`authorization-api simulate-revoke ID SOURCE` before the finalized bank advances.
+The returned token data matches `spl-revoke-after.bin`; reading finalized state again
+still returns `spl-delegate.bin`. The journal checkpoint stays unchanged.
+Warping past the imported deployment skipped its local ancestry and produced a
+program-cache insertion failure before execution. Starting at the deployment slot
+resolved it without editing the imported program bytes or changing validation.

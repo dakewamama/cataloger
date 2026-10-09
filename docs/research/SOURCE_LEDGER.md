@@ -16,6 +16,37 @@
 - Locked `five8_core` at 1.0.0: its allowed broad range otherwise reused 0.1.2,
   whose decode error lacks the Error implementation required by `solana-keypair`.
   This reproduces the client's published compatible lockfile without a new dependency.
+- Simulation: TARGETED SOURCE of the pinned client's
+  `simulate_transaction_with_config`, published transaction 4.1.6 serialization,
+  and [Agave v3.1.8 native RPC implementation](https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3692).
+  `minContextSlot` selects a lower bound, not an exact bank. Returned account count
+  cannot exceed message account count; addresses may include bank accounts outside
+  the message. Failed execution returns null entries. Reuse: DEPEND / PUBLIC API.
+  The bounded SPL path requests source, owner and Clock, verifies the same finalized
+  bank and retains native output separately from finalized observations. No source copied.
+- Agave `v3.1.10` (`7bc9c805218ca06769956e2cb61601329f5a0f6c`), Apache-2.0:
+  TARGETED SOURCE of
+  `program-runtime/src/loaded_programs.rs::{extract,finish_cooperative_loading_task}`,
+  `svm/src/transaction_processor.rs::replenish_program_cache`, and test-validator
+  JSON account import, followed by EXECUTED LOCALLY through its actual RPC server.
+  `spl-revoke-rpc.json` retains the successful finalized local response and input
+  envelopes. Code identity is unchanged from the captured SPL payload.
+  A deployment skipped by a local warp can fail cache ancestry/insertion checks;
+  `ProgramCacheHitMaxLimit` alone does not prove capacity exhaustion. Warping to the
+  deployment and observing a finalized descendant resolved the fixture failure.
+  Reuse: PUBLIC API / PATTERN ONLY. No implementation source copied.
+
+## SPL simulation fixture
+
+- Mollusk `0.15.1`, source `f432ef136ee9779d2a814ebf2b80f44c10607255`, Apache-2.0.
+  TARGETED SOURCE and EXECUTED LOCALLY through `process_transaction_instructions`
+  with the maintained token program fixture. Reuse: DEPEND / PUBLIC API.
+- `spl-delegate.bin` becomes `spl-revoke-after.bin` by executing canonical native
+  Revoke, not by editing account bytes. Complete ELF hash `8190d3f7...` matches the
+  captured classic SPL payload. The runtime transport tests combine this native
+  transition with retained code/Clock evidence explicitly as a fixture; it is not
+  an observed live delegate. Malformed cases are explicit test mutations.
+  No upstream implementation code or executable copied into the runtime.
 
 ## Carbon
 

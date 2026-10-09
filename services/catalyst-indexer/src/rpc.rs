@@ -1,16 +1,25 @@
-use crate::{Error, Observation, Origin, Snapshot, Target};
-use cataloger::ProgramVersion;
-use catalyst_sdk::{Adapter, Error as AdapterError, spl, subscriptions};
+use crate::{Coverage, Error, Journal, Observation, Origin, Snapshot, Target};
+use arm::AuthorizationChange;
+use cataloger::{Catalog, ProgramVersion};
+use catalyst_sdk::{self as sdk, Adapter, Error as AdapterError, spl, subscriptions};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_account_decoder_client_types::UiAccountEncoding;
 use solana_clock::Clock;
 use solana_loader_v3_interface::{get_program_data_address, state::UpgradeableLoaderState};
+use solana_program_pack::Pack;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_rpc_client_api::config::RpcAccountInfoConfig;
+use solana_rpc_client_api::{
+    config::{
+        RpcAccountInfoConfig, RpcSimulateTransactionAccountsConfig, RpcSimulateTransactionConfig,
+    },
+    response::{Response, RpcSimulateTransactionResult},
+};
 use solana_sdk_ids::{bpf_loader_upgradeable, sysvar};
+use solana_transaction::Transaction;
+use spl_token_interface::state::Account as TokenAccount;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -151,6 +160,198 @@ pub async fn observe(client: &RpcClient, scope: Scope) -> Result<Snapshot, Error
         },
         accounts,
         targets: scope.targets,
+    })
+}
+
+#[derive(Serialize)]
+pub struct SimulatedRevoke {
+    pub id: String,
+    pub state_version: String,
+    pub observation: Observation,
+    pub coverage: Coverage,
+    pub versions: Vec<ProgramVersion>,
+    pub runtime_version: String,
+    pub sdk_revision: String,
+    pub arm_schema_version: &'static str,
+    pub transaction: Transaction,
+    pub config: RpcSimulateTransactionConfig,
+    pub response: Response<RpcSimulateTransactionResult>,
+    pub changes: Vec<AuthorizationChange>,
+}
+
+/// Simulate one canonical SPL revoke against the retained finalized bank.
+/// The result is unsigned simulation evidence, never finalized journal state.
+pub async fn simulate_revoke(
+    client: &RpcClient,
+    journal: &Journal,
+    id: &str,
+    source: Pubkey,
+) -> Result<SimulatedRevoke, Error> {
+    let record = journal.replay(id).await?;
+    let snapshot = &record.snapshot;
+    if snapshot.observation.origin != Origin::Finalized || !client.commitment().is_finalized() {
+        return Err(Error::InvalidObservation("finalized evidence required"));
+    }
+    if snapshot.targets != [Target::SplDelegate { source }] {
+        return Err(AdapterError::UnsupportedOperation.into());
+    }
+    if journal
+        .latest(&snapshot.scope_id()?)
+        .await?
+        .is_none_or(|latest| latest.id != id)
+    {
+        return Err(Error::Conflict);
+    }
+    let adapter = spl::DelegateAdapter;
+    let catalog = Catalog::new(record.versions.clone()).map_err(|_| Error::ReplayMismatch)?;
+    let context = crate::context(
+        adapter.protocol().program_id,
+        snapshot,
+        &catalog,
+        id,
+        &mut Vec::new(),
+    )?;
+    let before = crate::spl_state(snapshot, source)?;
+    let authorization = sdk::compile_state(&adapter, &before, &context)?
+        .into_iter()
+        .next()
+        .ok_or(Error::NotFound)?;
+    let action = sdk::actions(&adapter, &authorization, &before, &context)?.remove(0);
+    let mut native = TokenAccount::unpack(&before.account.data)
+        .map_err(|error| AdapterError::InvalidState(error.to_string()))?;
+    let transaction = Transaction::new_with_payer(&action.instructions, Some(&native.owner));
+    let keys = [source, native.owner, sysvar::clock::id()];
+    let config = RpcSimulateTransactionConfig {
+        sig_verify: false,
+        replace_recent_blockhash: true,
+        commitment: Some(client.commitment()),
+        accounts: Some(RpcSimulateTransactionAccountsConfig {
+            encoding: Some(UiAccountEncoding::Base64),
+            addresses: keys.iter().map(ToString::to_string).collect(),
+        }),
+        min_context_slot: Some(snapshot.observation.slot),
+        ..Default::default()
+    };
+    if client.get_genesis_hash().await?.to_string() != snapshot.observation.cluster {
+        return Err(Error::InvalidObservation("cluster genesis mismatch"));
+    }
+    let response = client
+        .simulate_transaction_with_config(&transaction, config.clone())
+        .await?;
+    if response.value.err.is_some() {
+        return Err(Error::SimulationFailed(Box::new(response)));
+    }
+    // minContextSlot does not pin a bank; only the same finalized slot can agree.
+    if response.context.slot != snapshot.observation.slot {
+        return Err(Error::InvalidObservation(
+            "simulation/context slot mismatch",
+        ));
+    }
+    let values = response
+        .value
+        .accounts
+        .as_ref()
+        .filter(|values| values.len() == keys.len())
+        .ok_or(Error::InvalidObservation("missing simulated accounts"))?;
+    let mut after = snapshot.clone();
+    for (key, value) in keys.into_iter().zip(values) {
+        let account = match value {
+            Some(value) => {
+                let account = value
+                    .to_account()
+                    .ok_or(Error::InvalidObservation("undecodable RPC account"))?;
+                if value
+                    .space
+                    .is_some_and(|space| space != account.data.len() as u64)
+                {
+                    return Err(Error::InvalidObservation("truncated RPC account"));
+                }
+                account
+            }
+            None if key == source => {
+                return Err(Error::InvalidObservation("missing simulated source"));
+            }
+            None => Account::default(),
+        };
+        let entry = after
+            .accounts
+            .iter_mut()
+            .find(|(address, _)| *address == key)
+            .ok_or(AdapterError::InsufficientEvidence)?;
+        entry.1 = account;
+    }
+    if clock(&after.accounts, response.context.slot)?
+        != clock(&snapshot.accounts, snapshot.observation.slot)?
+    {
+        return Err(Error::InvalidObservation("simulation clock mismatch"));
+    }
+    // The delegate projection omits owner authority; require Revoke's full token-data change.
+    native.delegate = None.into();
+    native.delegated_amount = 0;
+    let mut expected = before.account.data.clone();
+    TokenAccount::pack(native, &mut expected)
+        .map_err(|error| AdapterError::InvalidState(error.to_string()))?;
+    let after_source = &after
+        .accounts
+        .iter()
+        .find(|(key, _)| *key == source)
+        .ok_or(AdapterError::InsufficientEvidence)?
+        .1;
+    if after_source.data != expected {
+        return Err(AdapterError::DiffMismatch.into());
+    }
+    let after_state = crate::spl_state(&after, source)?;
+    let simulation_id = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&(
+            &record.id,
+            &transaction,
+            &config,
+            &response
+        ))?)
+    );
+    let mut observed = context.clone();
+    observed
+        .evidence
+        .references
+        .push(format!("simulation:sha256:{simulation_id}"));
+    observed.evidence.observed_at = format!(
+        "{}:rpc:simulation:{}",
+        snapshot.observation.cluster, response.context.slot
+    );
+    let changes = sdk::verify_transaction_diff(
+        &adapter,
+        &action.instructions,
+        &before,
+        &context,
+        &after_state,
+        &observed,
+    )?;
+    // A checkpoint observed during RPC must invalidate the older simulation input.
+    if journal
+        .latest(&snapshot.scope_id()?)
+        .await?
+        .is_none_or(|latest| latest.id != id)
+    {
+        return Err(Error::Conflict);
+    }
+    Ok(SimulatedRevoke {
+        id: simulation_id,
+        state_version: record.id,
+        observation: snapshot.observation.clone(),
+        coverage: Coverage {
+            complete: false,
+            accounts: snapshot.accounts.iter().map(|(key, _)| *key).collect(),
+            targets: snapshot.targets.clone(),
+        },
+        versions: record.versions,
+        runtime_version: record.runtime_version,
+        sdk_revision: record.sdk_revision,
+        arm_schema_version: arm::SCHEMA_VERSION,
+        transaction,
+        config,
+        response,
+        changes,
     })
 }
 

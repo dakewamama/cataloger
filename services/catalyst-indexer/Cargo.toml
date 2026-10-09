@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 cataloger = { path = "../../crates/cataloger" }
-catalyst-sdk = { git = "https://github.com/dakewamama/catalyst-sdk", rev = "0bfb3f57c2b4b9c22cf41d582573e8e60352be05" }
+catalyst-sdk = { git = "https://github.com/dakewamama/catalyst-sdk", rev = "54ed06aa3a7c8a31268dface42d0bf27ca4adaee" }
 arm = { git = "https://github.com/dakewamama/arm", rev = "3b91100314473b616b5fd6f77214c6b6282a1dfb" }
 solana-account = { version = "=4.3.1", features = ["serde"] }
 solana-pubkey = { version = "=4.2.0", features = ["serde"] }
@@ -24,6 +24,7 @@ solana-rpc-client = { version = "=4.2.2", default-features = false, features = [
 solana-rpc-client-api = "=4.2.2"
 solana-account-decoder-client-types = { version = "=4.2.2", features = ["agave-unstable-api"] }
 solana-commitment-config = "=3.1.1"
+solana-transaction = { version = "=4.1.6", features = ["serde", "wincode"] }
 sha2 = "0.10"
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
@@ -35,3 +36,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
 tower = { version = "0.4", features = ["util"] }
 dotenvy = "0.15"
+
+[dev-dependencies]
+base64 = "=0.22.1"

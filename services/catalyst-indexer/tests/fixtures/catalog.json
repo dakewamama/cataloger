@@ -46,7 +46,7 @@
     "adapter": {
       "protocol": "spl-token",
       "version": "0.1",
-      "source": "https://github.com/dakewamama/catalyst-sdk/blob/0bfb3f57c2b4b9c22cf41d582573e8e60352be05/src/spl.rs"
+      "source": "https://github.com/dakewamama/catalyst-sdk/blob/54ed06aa3a7c8a31268dface42d0bf27ca4adaee/src/spl.rs"
     },
     "provenance": {
       "source": "https://github.com/dakewamama/catalyst-sdk/blob/b3682df29b3b6c64e9fcf96b35a6dd23fa552759/tests/fixtures/spl-delegate.bin",
@@ -101,7 +101,7 @@
     "adapter": {
       "protocol": "subscriptions",
       "version": "0.3",
-      "source": "https://github.com/dakewamama/catalyst-sdk/blob/0bfb3f57c2b4b9c22cf41d582573e8e60352be05/src/subscriptions.rs"
+      "source": "https://github.com/dakewamama/catalyst-sdk/blob/54ed06aa3a7c8a31268dface42d0bf27ca4adaee/src/subscriptions.rs"
     },
     "provenance": {
       "source": "https://github.com/dakewamama/catalyst-sdk/blob/b3682df29b3b6c64e9fcf96b35a6dd23fa552759/tests/fixtures/subscriptions-lifecycle.json",

@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_program_pack::Pack;
 use solana_pubkey::Pubkey;
+use solana_rpc_client_api::response::{Response, RpcSimulateTransactionResult};
 use spl_token_interface::state::Account as TokenAccount;
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::{
@@ -25,7 +26,7 @@ use std::{
 
 pub mod rpc;
 
-pub const SDK_REVISION: &str = "0bfb3f57c2b4b9c22cf41d582573e8e60352be05";
+pub const SDK_REVISION: &str = "54ed06aa3a7c8a31268dface42d0bf27ca4adaee";
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,7 +132,9 @@ impl From<sdk::Error> for Projection {
                 Self::Unsupported { reason }
             }
             sdk::Error::InsufficientEvidence => Self::Incomplete { reason },
-            sdk::Error::InvalidState(_) | sdk::Error::InvalidProjection => Self::Invalid { reason },
+            sdk::Error::InvalidState(_)
+            | sdk::Error::InvalidProjection
+            | sdk::Error::DiffMismatch => Self::Invalid { reason },
         }
     }
 }
@@ -188,6 +191,35 @@ fn context(
     })
 }
 
+fn spl_state(snapshot: &Snapshot, source: Pubkey) -> Result<spl::State, sdk::Error> {
+    let account = |key| {
+        snapshot
+            .accounts
+            .iter()
+            .find(|(address, _)| *address == key)
+            .map(|(_, account)| account.clone())
+            .ok_or(sdk::Error::InsufficientEvidence)
+    };
+    let mut state = spl::State {
+        address: source,
+        account: account(source)?,
+        owner: Account::default(),
+        delegate: Account::default(),
+    };
+    if state.account.owner == spl::DelegateAdapter.protocol().program_id
+        && !state.account.executable
+    {
+        let native = TokenAccount::unpack(&state.account.data)
+            .map_err(|error| sdk::Error::InvalidState(error.to_string()))?;
+        state.owner = account(native.owner)?;
+        state.delegate = Option::<Pubkey>::from(native.delegate)
+            .map(account)
+            .transpose()?
+            .unwrap_or_default();
+    }
+    Ok(state)
+}
+
 fn compile(snapshot: &Snapshot, catalog: &Catalog, id: &str) -> (Vec<ProgramVersion>, Projection) {
     let accounts: BTreeMap<_, _> = snapshot
         .accounts
@@ -217,21 +249,7 @@ fn compile(snapshot: &Snapshot, catalog: &Catalog, id: &str) -> (Vec<ProgramVers
                     if !adapter.supports(&context.native) {
                         return Err(sdk::Error::UnsupportedVersion);
                     }
-                    let mut state = spl::State {
-                        address: *source,
-                        account: account(*source)?,
-                        owner: Account::default(),
-                        delegate: Account::default(),
-                    };
-                    if state.account.owner == context.program_id && !state.account.executable {
-                        let native = TokenAccount::unpack(&state.account.data)
-                            .map_err(|error| sdk::Error::InvalidState(error.to_string()))?;
-                        state.owner = account(native.owner)?;
-                        state.delegate = Option::<Pubkey>::from(native.delegate)
-                            .map(account)
-                            .transpose()?
-                            .unwrap_or_default();
-                    }
+                    let state = spl_state(snapshot, *source)?;
                     sdk::compile_state(&adapter, &state, &context)?
                 }
                 Target::Subscription {
@@ -320,6 +338,8 @@ pub enum Error {
     ReplayMismatch,
     NotFound,
     InvalidObservation(&'static str),
+    Adapter(sdk::Error),
+    SimulationFailed(Box<Response<RpcSimulateTransactionResult>>),
     Rpc(Box<solana_rpc_client_api::client_error::Error>),
 }
 
@@ -329,6 +349,10 @@ impl std::fmt::Display for Error {
             Self::Database(error) => error.fmt(f),
             Self::Json(error) => error.fmt(f),
             Self::Rpc(error) => error.fmt(f),
+            Self::Adapter(error) => error.fmt(f),
+            Self::SimulationFailed(response) => {
+                write!(f, "native simulation failed: {:?}", response.value.err)
+            }
             Self::InvalidObservation(reason) => write!(f, "Invalid observation: {reason}"),
             _ => write!(f, "{self:?}"),
         }
@@ -346,6 +370,12 @@ impl From<sqlx::Error> for Error {
 impl From<serde_json::Error> for Error {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
+    }
+}
+
+impl From<sdk::Error> for Error {
+    fn from(error: sdk::Error) -> Self {
+        Self::Adapter(error)
     }
 }
 

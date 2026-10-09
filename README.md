@@ -65,6 +65,7 @@ cargo run -p catalyst-indexer --bin authorization-api -- import CATALOG.json SNA
 cargo run -p catalyst-indexer --bin authorization-api -- observe CATALOG.json SCOPE.json
 cargo run -p catalyst-indexer --bin authorization-api -- replay SNAPSHOT_ID
 cargo run -p catalyst-indexer --bin authorization-api -- latest SNAPSHOT_ID
+cargo run -p catalyst-indexer --bin authorization-api -- simulate-revoke SNAPSHOT_ID TOKEN_ACCOUNT
 cargo run -p catalyst-indexer --bin authorization-api -- serve 127.0.0.1:3001
 ```
 
@@ -88,6 +89,31 @@ loader ownership, executable state, canonical ProgramData linkage, active deploy
 slot and the full payload hash against the catalog record. Fixture labels, unknown
 code or unsupported slots cannot become supported live projections. Clock supplies
 the bank's timestamp, not local wall time or a separate block-time request.
+
+`simulate-revoke` uses `RPC_URL` to simulate one canonical classic SPL delegate revoke.
+Its input must be the latest unambiguous finalized journal record for a scope containing
+only that token account. It replays the record with its exact SDK revision and verified
+program bytes before constructing the native instruction. Multisig owners, owners with
+program-owned account state, frozen accounts, unknown versions and absent delegates
+are rejected. The checkpoint is checked again after RPC to reject newly observed state.
+
+The unsigned request uses the token owner as fee payer, disables signature verification
+and asks the node to replace the blockhash. No transaction is signed or submitted.
+The node returns the token account, owner and Clock; simulation must succeed in exactly
+the retained finalized slot with the same Clock. A newer slot fails even when it satisfies
+`minContextSlot`; observe again before retrying. The verified canonical instruction
+cannot write the retained program, ProgramData or delegate account in that frozen bank.
+The post-state must match native Revoke's complete token-data change and the SDK's
+declared ARM Diff. Null/truncated accounts and semantic disagreement fail closed.
+
+The result contains the unsigned request, RPC configuration and native response, a
+content hash binding them to the input state hash, exact versions and partial coverage.
+Its `observation` describes the finalized input; the response is hypothetical output.
+Simulation never advances the journal or turns post-state into finalized observations.
+The request's placeholder blockhash remains in `transaction`; the node's replacement
+is retained in `response`. This is evidence of this simulation under RPC trust, without
+proof of wallet control or a guarantee about future execution. Other transactions and
+Subscriptions actions still require separate simulation support.
 
 `GET /snapshots/{id}` returns retained evidence and its projection.
 `GET /snapshots/{id}/authorizations/{address}` selects records that mention the
