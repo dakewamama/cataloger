@@ -1,4 +1,6 @@
-use arm::{Authorization, EvidenceBundle, NativeContext, Principal, Subject};
+use arm::{
+    Authorization, EffectiveAuthorization, EvidenceBundle, NativeContext, Principal, Subject,
+};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -113,8 +115,8 @@ impl Snapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Projection {
-    Compiled { authorizations: Vec<Authorization> },
+pub enum Projection<A = Authorization> {
+    Compiled { authorizations: Vec<A> },
     Unsupported { reason: String },
     Incomplete { reason: String },
     Invalid { reason: String },
@@ -505,12 +507,12 @@ pub struct Coverage {
 }
 
 #[derive(Serialize)]
-pub struct AuthorizationView {
+pub struct AuthorizationView<A = Authorization> {
     pub state_version: String,
     pub observation: Observation,
     pub coverage: Coverage,
     pub versions: Vec<ProgramVersion>,
-    pub projection: Projection,
+    pub projection: Projection<A>,
     pub runtime_version: String,
     pub sdk_revision: String,
     pub arm_schema_version: &'static str,
@@ -628,6 +630,44 @@ async fn current_authorizations(
     Ok(Json(authorization_view(record, &address)))
 }
 
+async fn current_effective(
+    State(journal): State<Journal>,
+    Path((scope_id, address)): Path<(String, String)>,
+) -> Result<Json<AuthorizationView<EffectiveAuthorization>>, StatusCode> {
+    let address = address
+        .parse::<Pubkey>()
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .to_string();
+    let record = journal
+        .latest(&scope_id)
+        .await
+        .map_err(scope_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let view = authorization_view(record, &address);
+    let projection = match view.projection {
+        Projection::Compiled { authorizations } => Projection::Compiled {
+            authorizations: authorizations
+                .iter()
+                .map(|authorization| authorization.effective_at(view.observation.unix_timestamp))
+                .collect::<Result<_, _>>()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        },
+        Projection::Unsupported { reason } => Projection::Unsupported { reason },
+        Projection::Incomplete { reason } => Projection::Incomplete { reason },
+        Projection::Invalid { reason } => Projection::Invalid { reason },
+    };
+    Ok(Json(AuthorizationView {
+        state_version: view.state_version,
+        observation: view.observation,
+        coverage: view.coverage,
+        versions: view.versions,
+        projection,
+        runtime_version: view.runtime_version,
+        sdk_revision: view.sdk_revision,
+        arm_schema_version: view.arm_schema_version,
+    }))
+}
+
 pub fn router(journal: Journal) -> Router {
     Router::new()
         .route("/snapshots/:id", get(snapshot))
@@ -639,6 +679,10 @@ pub fn router(journal: Journal) -> Router {
         .route(
             "/scopes/:scope_id/authorizations/:address",
             get(current_authorizations),
+        )
+        .route(
+            "/scopes/:scope_id/effective/:address",
+            get(current_effective),
         )
         .with_state(journal)
 }

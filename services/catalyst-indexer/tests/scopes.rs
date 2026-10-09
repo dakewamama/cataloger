@@ -1,4 +1,4 @@
-use arm::Authorization;
+use arm::{AuthorityKind, Authorization, Availability, EffectiveAuthorization};
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -766,4 +766,153 @@ async fn current_http_returns_latest_partial_coverage_provenance_and_400_404() {
     ] {
         assert_eq!(get(&app, &path).await.0, expected);
     }
+}
+
+#[tokio::test]
+async fn effective_native_authority_uses_observed_clock_and_preserves_uncertainty() {
+    let plan: Snapshot = serde_json::from_str(include_str!("fixtures/owner-pull-60.json")).unwrap();
+    for (snapshot, address, count) in [
+        (spl(), key(2), 1),
+        (plan.clone(), key(1), 2),
+        (plan, key(2), 2),
+        (revoke(false), key(1), 2),
+    ] {
+        let journal = Journal::open("sqlite::memory:").await.unwrap();
+        let record = ingest(&journal, snapshot).await;
+        let app = router(journal);
+        let prefix = format!("/scopes/{}", scope(&record.snapshot));
+        let (status, raw) = get(&app, &format!("{prefix}/authorizations/{address}")).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, mut evaluated) = get(&app, &format!("{prefix}/effective/{address}")).await;
+        assert_eq!(status, StatusCode::OK);
+        let effective: Vec<EffectiveAuthorization> =
+            serde_json::from_value(evaluated["projection"]["authorizations"].clone()).unwrap();
+        assert_eq!(effective.len(), count);
+        let expired = record.snapshot.observation.slot == 122;
+        for entry in &effective {
+            assert_eq!(
+                entry.evaluated_at_unix_seconds,
+                record.snapshot.observation.unix_timestamp
+            );
+            assert_eq!(
+                entry.availability,
+                match entry.authorization.authority_kind {
+                    AuthorityKind::Direct => Availability::Conditional,
+                    AuthorityKind::Derived { .. } if expired => Availability::Inactive,
+                    AuthorityKind::Derived { .. } | AuthorityKind::Administrative => {
+                        Availability::Unknown
+                    }
+                }
+            );
+        }
+        evaluated["projection"]["authorizations"] = json(
+            effective
+                .iter()
+                .map(|entry| &entry.authorization)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(evaluated, raw);
+        assert_eq!(evaluated["coverage"]["complete"], false);
+    }
+}
+
+#[tokio::test]
+async fn effective_latest_revocation_and_failed_projections_cannot_restore_an_old_grant() {
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let initial: Snapshot =
+        serde_json::from_str(include_str!("fixtures/owner-pull-60.json")).unwrap();
+    let record = ingest(&journal, initial.clone()).await;
+    let app = router(journal.clone());
+    let merchant = format!("/scopes/{}/effective/{}", scope(&initial), key(6));
+    let (_, before) = get(&app, &merchant).await;
+    assert_eq!(
+        before["projection"]["authorizations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        before["projection"]["authorizations"][0]["availability"],
+        "unknown"
+    );
+    let revoked = ingest(&journal, revoke(true)).await;
+    let (status, after) = get(&app, &merchant).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after["state_version"], revoked.id);
+    assert_eq!(
+        after["projection"],
+        serde_json::json!({"status": "compiled", "authorizations": []})
+    );
+    assert_eq!(ingest(&journal, initial).await, record);
+    assert_eq!(get(&app, &merchant).await.1, after);
+    for expected in ["unsupported", "incomplete", "invalid"] {
+        let journal = Journal::open("sqlite::memory:").await.unwrap();
+        ingest(&journal, spl()).await;
+        let mut failed = ordering(spl(), if expected == "unsupported" { 123 } else { 2 });
+        if expected == "incomplete" {
+            failed.accounts.retain(|(address, _)| *address != key(2));
+        }
+        if expected == "invalid" {
+            failed.accounts[0].1.data.truncate(4);
+        }
+        let record = ingest(&journal, failed).await;
+        let app = router(journal);
+        let (status, view) = get(
+            &app,
+            &format!("/scopes/{}/effective/{}", scope(&record.snapshot), key(2)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view["state_version"], record.id);
+        assert_eq!(view["projection"]["status"], expected);
+        assert_eq!(view["projection"], json(&record.projection));
+    }
+}
+
+#[tokio::test]
+async fn effective_route_rejects_bad_addresses_conflicting_banks_and_invalid_arm() {
+    let database = Database::new();
+    let journal = Journal::open(&database.url()).await.unwrap();
+    let record = ingest(&journal, spl()).await;
+    ingest(&journal, revoke(false)).await;
+    ingest(&journal, revoke(true)).await;
+    let app = router(journal.clone());
+    for (path, expected) in [
+        (
+            format!("/scopes/{}/effective/invalid", scope(&record.snapshot)),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            format!("/scopes/missing/effective/{}", key(2)),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            format!("/scopes/{}/effective/{}", scope(&revoke(false)), key(1)),
+            StatusCode::CONFLICT,
+        ),
+    ] {
+        assert_eq!(get(&app, &path).await.0, expected);
+    }
+    let path = format!("/scopes/{}/effective/{}", scope(&record.snapshot), key(2));
+    let pool = SqlitePool::connect(&database.url()).await.unwrap();
+    let mut malformed = record.clone();
+    if let Projection::Compiled { authorizations } = &mut malformed.projection {
+        authorizations[0].schema_version = "unsupported".into();
+    }
+    let raw = serde_json::to_string(&malformed).unwrap();
+    sqlx::query("UPDATE authority_snapshots SET record = ?, record_sha256 = ? WHERE id = ?")
+        .bind(&raw)
+        .bind(digest(&raw))
+        .bind(&record.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(get(&app, &path).await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    sqlx::query("UPDATE authority_snapshots SET record_sha256 = 'corrupt' WHERE id = ?")
+        .bind(&record.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(get(&app, &path).await.0, StatusCode::INTERNAL_SERVER_ERROR);
 }

@@ -109,6 +109,12 @@ cannot regress the checkpoint. Distinct observations at the newest slot return 4
 duplicates cannot clear that ambiguity. A strictly newer observation resolves it.
 Historical records remain accessible without combining accounts from different banks.
 
+`GET /scopes/{scope_id}/effective/{address}` uses the same coverage and provenance
+envelope. Compiled entries are ARM `EffectiveAuthorization` values evaluated at the
+observed bank's timestamp. Conditional availability still requires native checks;
+derived and partially observed authority remains unknown unless ARM can prove it
+inactive. Evaluation does not use wall time or invent a later period's allowance.
+
 The checkpoint is an index over immutable records, with fixed-width big-endian slot
 bytes preserving unsigned `u64` ordering. Startup backfills older journal metadata
 from checksum-verified records without rewriting their raw evidence. Journal and
