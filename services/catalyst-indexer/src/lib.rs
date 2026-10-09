@@ -1,5 +1,6 @@
 use arm::{
-    Authorization, EffectiveAuthorization, EvidenceBundle, NativeContext, Principal, Subject,
+    AuthorityKind, Authorization, EffectiveAuthorization, EvidenceBundle, NativeContext, Principal,
+    Subject,
 };
 use axum::{
     Json, Router,
@@ -17,7 +18,7 @@ use solana_pubkey::Pubkey;
 use spl_token_interface::state::Account as TokenAccount;
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::{
-    collections::{BTreeMap, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     str::FromStr,
     time::Duration,
 };
@@ -518,6 +519,13 @@ pub struct AuthorizationView<A = Authorization> {
     pub arm_schema_version: &'static str,
 }
 
+#[derive(Serialize)]
+struct GraphView {
+    #[serde(flatten)]
+    state: AuthorizationView<EffectiveAuthorization>,
+    unresolved_parents: Option<Vec<String>>,
+}
+
 fn principal_contains(principal: &Principal, address: &str) -> bool {
     match principal {
         Principal::Identity(identity) => identity == address,
@@ -561,15 +569,17 @@ async fn authorizations(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(authorization_view(record, &address)))
+    Ok(Json(authorization_view(record, Some(&address))))
 }
 
-fn authorization_view(record: Record, address: &str) -> AuthorizationView {
+fn authorization_view(record: Record, address: Option<&str>) -> AuthorizationView {
     let projection = match record.projection {
         Projection::Compiled { authorizations } => Projection::Compiled {
             authorizations: authorizations
                 .into_iter()
-                .filter(|authorization| mentions(authorization, address))
+                .filter(|authorization| {
+                    address.is_none_or(|address| mentions(authorization, address))
+                })
                 .collect(),
         },
         projection => projection,
@@ -627,23 +637,20 @@ async fn current_authorizations(
         .await
         .map_err(scope_error)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(authorization_view(record, &address)))
+    Ok(Json(authorization_view(record, Some(&address))))
 }
 
 async fn current_effective(
     State(journal): State<Journal>,
     Path((scope_id, address)): Path<(String, String)>,
 ) -> Result<Json<AuthorizationView<EffectiveAuthorization>>, StatusCode> {
-    let address = address
-        .parse::<Pubkey>()
-        .map_err(|_| StatusCode::BAD_REQUEST)?
-        .to_string();
-    let record = journal
-        .latest(&scope_id)
-        .await
-        .map_err(scope_error)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let view = authorization_view(record, &address);
+    let Json(view) = current_authorizations(State(journal), Path((scope_id, address))).await?;
+    Ok(Json(effective_view(view)?))
+}
+
+fn effective_view(
+    view: AuthorizationView,
+) -> Result<AuthorizationView<EffectiveAuthorization>, StatusCode> {
     let projection = match view.projection {
         Projection::Compiled { authorizations } => Projection::Compiled {
             authorizations: authorizations
@@ -656,7 +663,7 @@ async fn current_effective(
         Projection::Incomplete { reason } => Projection::Incomplete { reason },
         Projection::Invalid { reason } => Projection::Invalid { reason },
     };
-    Ok(Json(AuthorizationView {
+    Ok(AuthorizationView {
         state_version: view.state_version,
         observation: view.observation,
         coverage: view.coverage,
@@ -665,6 +672,69 @@ async fn current_effective(
         runtime_version: view.runtime_version,
         sdk_revision: view.sdk_revision,
         arm_schema_version: view.arm_schema_version,
+    })
+}
+
+async fn current_coverage(
+    State(journal): State<Journal>,
+    Path(scope_id): Path<String>,
+) -> Result<Json<AuthorizationView>, StatusCode> {
+    let Json(record) = current_snapshot(State(journal), Path(scope_id)).await?;
+    Ok(Json(authorization_view(record, None)))
+}
+
+async fn current_graph(
+    State(journal): State<Journal>,
+    Path((scope_id, address)): Path<(String, String)>,
+) -> Result<Json<GraphView>, StatusCode> {
+    let address = address
+        .parse::<Pubkey>()
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .to_string();
+    let Json(view) = current_coverage(State(journal), Path(scope_id)).await?;
+    let mut state = effective_view(view)?;
+    let mut unresolved_parents = None;
+    if let Projection::Compiled { authorizations } = &mut state.projection {
+        let known: BTreeSet<_> = authorizations
+            .iter()
+            .map(|entry| entry.authorization.id.as_str())
+            .collect();
+        if known.len() != authorizations.len() {
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        let mut selected: BTreeSet<_> = authorizations
+            .iter()
+            .filter(|entry| mentions(&entry.authorization, &address))
+            .map(|entry| entry.authorization.id.clone())
+            .collect();
+        loop {
+            let count = selected.len();
+            for entry in authorizations.iter() {
+                let authorization = &entry.authorization;
+                if let AuthorityKind::Derived { parents } = &authorization.authority_kind
+                    && (selected.contains(&authorization.id)
+                        || parents.iter().any(|parent| selected.contains(parent)))
+                {
+                    selected.insert(authorization.id.clone());
+                    selected.extend(parents.iter().cloned());
+                }
+            }
+            if count == selected.len() {
+                break;
+            }
+        }
+        unresolved_parents = Some(
+            selected
+                .iter()
+                .filter(|id| !known.contains(id.as_str()))
+                .cloned()
+                .collect(),
+        );
+        authorizations.retain(|entry| selected.contains(&entry.authorization.id));
+    }
+    Ok(Json(GraphView {
+        state,
+        unresolved_parents,
     }))
 }
 
@@ -684,5 +754,7 @@ pub fn router(journal: Journal) -> Router {
             "/scopes/:scope_id/effective/:address",
             get(current_effective),
         )
+        .route("/scopes/:scope_id/coverage", get(current_coverage))
+        .route("/scopes/:scope_id/graph/:address", get(current_graph))
         .with_state(journal)
 }

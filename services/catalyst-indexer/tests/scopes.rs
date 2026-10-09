@@ -1,4 +1,6 @@
-use arm::{AuthorityKind, Authorization, Availability, EffectiveAuthorization};
+use arm::{
+    AuthorityKind, Authorization, Availability, EffectiveAuthorization, Principal, UsageSemantics,
+};
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -817,7 +819,7 @@ async fn effective_native_authority_uses_observed_clock_and_preserves_uncertaint
 }
 
 #[tokio::test]
-async fn effective_latest_revocation_and_failed_projections_cannot_restore_an_old_grant() {
+async fn scoped_views_cannot_restore_a_revoked_or_failed_grant() {
     let journal = Journal::open("sqlite::memory:").await.unwrap();
     let initial: Snapshot =
         serde_json::from_str(include_str!("fixtures/owner-pull-60.json")).unwrap();
@@ -846,6 +848,15 @@ async fn effective_latest_revocation_and_failed_projections_cannot_restore_an_ol
     );
     assert_eq!(ingest(&journal, initial).await, record);
     assert_eq!(get(&app, &merchant).await.1, after);
+    let (status, graph) = get(
+        &app,
+        &format!("/scopes/{}/graph/{}", scope(&revoked.snapshot), key(6)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(graph["state_version"], revoked.id);
+    assert_eq!(graph["projection"], after["projection"]);
+    assert_eq!(graph["unresolved_parents"], serde_json::json!([]));
     for expected in ["unsupported", "incomplete", "invalid"] {
         let journal = Journal::open("sqlite::memory:").await.unwrap();
         ingest(&journal, spl()).await;
@@ -858,20 +869,26 @@ async fn effective_latest_revocation_and_failed_projections_cannot_restore_an_ol
         }
         let record = ingest(&journal, failed).await;
         let app = router(journal);
-        let (status, view) = get(
-            &app,
-            &format!("/scopes/{}/effective/{}", scope(&record.snapshot), key(2)),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(view["state_version"], record.id);
-        assert_eq!(view["projection"]["status"], expected);
-        assert_eq!(view["projection"], json(&record.projection));
+        let prefix = format!("/scopes/{}", scope(&record.snapshot));
+        for suffix in [
+            format!("effective/{}", key(2)),
+            format!("graph/{}", key(2)),
+            "coverage".into(),
+        ] {
+            let (status, view) = get(&app, &format!("{prefix}/{suffix}")).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(view["state_version"], record.id);
+            assert_eq!(view["projection"]["status"], expected);
+            assert_eq!(view["projection"], json(&record.projection));
+            if suffix.starts_with("graph/") {
+                assert_eq!(view["unresolved_parents"], Value::Null);
+            }
+        }
     }
 }
 
 #[tokio::test]
-async fn effective_route_rejects_bad_addresses_conflicting_banks_and_invalid_arm() {
+async fn scoped_routes_reject_bad_addresses_conflicting_banks_and_invalid_arm() {
     let database = Database::new();
     let journal = Journal::open(&database.url()).await.unwrap();
     let record = ingest(&journal, spl()).await;
@@ -889,6 +906,23 @@ async fn effective_route_rejects_bad_addresses_conflicting_banks_and_invalid_arm
         ),
         (
             format!("/scopes/{}/effective/{}", scope(&revoke(false)), key(1)),
+            StatusCode::CONFLICT,
+        ),
+        (
+            format!("/scopes/{}/graph/invalid", scope(&record.snapshot)),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            format!("/scopes/missing/graph/{}", key(2)),
+            StatusCode::NOT_FOUND,
+        ),
+        ("/scopes/missing/coverage".into(), StatusCode::NOT_FOUND),
+        (
+            format!("/scopes/{}/graph/{}", scope(&revoke(false)), key(1)),
+            StatusCode::CONFLICT,
+        ),
+        (
+            format!("/scopes/{}/coverage", scope(&revoke(false))),
             StatusCode::CONFLICT,
         ),
     ] {
@@ -909,10 +943,181 @@ async fn effective_route_rejects_bad_addresses_conflicting_banks_and_invalid_arm
         .await
         .unwrap();
     assert_eq!(get(&app, &path).await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    let graph = format!("/scopes/{}/graph/{}", scope(&record.snapshot), key(2));
+    assert_eq!(get(&app, &graph).await.0, StatusCode::INTERNAL_SERVER_ERROR);
     sqlx::query("UPDATE authority_snapshots SET record_sha256 = 'corrupt' WHERE id = ?")
         .bind(&record.id)
         .execute(&pool)
         .await
         .unwrap();
     assert_eq!(get(&app, &path).await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(get(&app, &graph).await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        get(
+            &app,
+            &format!("/scopes/{}/coverage", scope(&record.snapshot))
+        )
+        .await
+        .0,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+}
+
+#[tokio::test]
+async fn graph_preserves_native_lineage_shared_budget_and_administrative_authority() {
+    let snapshot: Snapshot =
+        serde_json::from_str(include_str!("fixtures/owner-pull-60.json")).unwrap();
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = ingest(&journal, snapshot).await;
+    let app = router(journal);
+    let prefix = format!("/scopes/{}", scope(&record.snapshot));
+    let (status, coverage) = get(&app, &format!("{prefix}/coverage")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        coverage["projection"]["authorizations"],
+        json(compiled(&record))
+    );
+    assert_eq!(coverage["state_version"], record.id);
+    assert_eq!(coverage["observation"], json(&record.snapshot.observation));
+    assert_eq!(coverage["versions"], json(&record.versions));
+    assert_eq!(coverage["coverage"]["complete"], false);
+    let technical = compiled(&record)
+        .iter()
+        .find(|authorization| authorization.authority_kind == AuthorityKind::Direct)
+        .unwrap();
+    let Principal::Identity(signer) = &technical.principal else {
+        panic!("native technical principal must be an identity")
+    };
+    for (address, count) in [
+        (key(6).to_string(), 2),
+        (signer.clone(), 2),
+        (key(2).to_string(), 3),
+        (key(99).to_string(), 0),
+    ] {
+        let path = format!("{prefix}/graph/{address}");
+        let (status, mut graph) = get(&app, &path).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(get(&app, &path).await.1, graph);
+        let nodes: Vec<EffectiveAuthorization> =
+            serde_json::from_value(graph["projection"]["authorizations"].clone()).unwrap();
+        assert_eq!(nodes.len(), count);
+        assert_eq!(graph["unresolved_parents"], serde_json::json!([]));
+        for node in &nodes {
+            assert!(compiled(&record).contains(&node.authorization));
+            assert_eq!(
+                node.evaluated_at_unix_seconds,
+                record.snapshot.observation.unix_timestamp
+            );
+            match &node.authorization.authority_kind {
+                AuthorityKind::Direct => {
+                    assert_eq!(node.availability, Availability::Conditional);
+                    assert_eq!(
+                        node.authorization.usage,
+                        UsageSemantics::Cumulative {
+                            remaining: Some(u64::MAX - 60)
+                        }
+                    );
+                }
+                AuthorityKind::Derived { parents } => {
+                    assert_eq!(parents, std::slice::from_ref(&technical.id));
+                    assert_eq!(node.availability, Availability::Unknown);
+                    assert_eq!(
+                        node.authorization.usage,
+                        UsageSemantics::Recurring {
+                            period_seconds: 3600,
+                            anchor_unix_seconds: 1_800_000_000,
+                            observed_period_start: 1_800_000_000,
+                            remaining: Some(40),
+                        }
+                    );
+                    assert!(
+                        matches!(&node.authorization.principal, Principal::AnyOf(principals) if principals.len() == 2)
+                    );
+                }
+                AuthorityKind::Administrative => {
+                    assert_eq!(node.availability, Availability::Unknown)
+                }
+            }
+        }
+        graph.as_object_mut().unwrap().remove("unresolved_parents");
+        graph["projection"] = coverage["projection"].clone();
+        assert_eq!(graph, coverage);
+    }
+}
+
+#[tokio::test]
+async fn graph_uses_only_current_parent_evidence_and_bounds_cyclic_or_ambiguous_lineage() {
+    let snapshot: Snapshot =
+        serde_json::from_str(include_str!("fixtures/owner-pull-60.json")).unwrap();
+    let database = Database::new();
+    let journal = Journal::open(&database.url()).await.unwrap();
+    let old = ingest(&journal, snapshot.clone()).await;
+    let current = ingest(&journal, ordering(snapshot, 109)).await;
+    let app = router(journal);
+    let pool = SqlitePool::connect(&database.url()).await.unwrap();
+    let path = format!("/scopes/{}/graph/{}", scope(&current.snapshot), key(6));
+    let parent = compiled(&old)
+        .iter()
+        .find(|a| a.authority_kind == AuthorityKind::Direct)
+        .unwrap()
+        .id
+        .clone();
+    for case in ["missing", "cycle", "duplicate"] {
+        // Synthetic retained projections test graph behavior, not native program execution.
+        let mut record = current.clone();
+        let Projection::Compiled { authorizations } = &mut record.projection else {
+            panic!("expected native compiled projection")
+        };
+        if case == "missing" {
+            authorizations.retain(|a| a.id != parent);
+        } else if case == "cycle" {
+            let child = authorizations
+                .iter()
+                .find(|a| matches!(a.authority_kind, AuthorityKind::Derived { .. }))
+                .unwrap()
+                .id
+                .clone();
+            authorizations
+                .iter_mut()
+                .find(|a| a.id == parent)
+                .unwrap()
+                .authority_kind = AuthorityKind::Derived {
+                parents: vec![child],
+            };
+        } else {
+            authorizations.push(authorizations[0].clone());
+        }
+        let raw = serde_json::to_string(&record).unwrap();
+        sqlx::query("UPDATE authority_snapshots SET record = ?, record_sha256 = ? WHERE id = ?")
+            .bind(&raw)
+            .bind(digest(&raw))
+            .bind(&current.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, graph) = get(&app, &path).await;
+        if case == "duplicate" {
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            continue;
+        }
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(graph["state_version"], current.id);
+        assert_eq!(graph["coverage"]["complete"], false);
+        let nodes: Vec<EffectiveAuthorization> =
+            serde_json::from_value(graph["projection"]["authorizations"].clone()).unwrap();
+        assert!(
+            nodes
+                .iter()
+                .all(|node| node.availability == Availability::Unknown)
+        );
+        assert_eq!(nodes.len(), if case == "missing" { 1 } else { 2 });
+        assert_eq!(
+            graph["unresolved_parents"],
+            if case == "missing" {
+                json(vec![parent.clone()])
+            } else {
+                serde_json::json!([])
+            }
+        );
+    }
 }

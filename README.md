@@ -115,6 +115,19 @@ observed bank's timestamp. Conditional availability still requires native checks
 derived and partially observed authority remains unknown unless ARM can prove it
 inactive. Evaluation does not use wall time or invent a later period's allowance.
 
+`GET /scopes/{scope_id}/graph/{address}` selects grants that mention the address and
+their connected observed parents and children. Nodes are
+the same effective ARM grants; `authority_kind.parents` retains the links. Compound
+principals and shared budgets remain one grant. Missing parent IDs appear in
+`unresolved_parents`, without consulting older banks or inventing parent state.
+This field is null when the projection cannot be compiled. Lineage does not establish
+that a parent is active or that administrative authority grants direct spending.
+
+`GET /scopes/{scope_id}/coverage` returns the latest scope's coverage, provenance and
+full projection. Coverage remains partial; a compiled projection does not establish
+complete address coverage. Both endpoints preserve newer failures and return 409
+for conflicting observations at the newest slot.
+
 The checkpoint is an index over immutable records, with fixed-width big-endian slot
 bytes preserving unsigned `u64` ordering. Startup backfills older journal metadata
 from checksum-verified records without rewriting their raw evidence. Journal and
