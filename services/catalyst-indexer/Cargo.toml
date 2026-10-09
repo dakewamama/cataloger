@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 cataloger = { path = "../../crates/cataloger" }
-catalyst-sdk = { git = "https://github.com/dakewamama/catalyst-sdk", rev = "db2e41047854022a0c9a998e66fd6edbfe89dfa5" }
+catalyst-sdk = { git = "https://github.com/dakewamama/catalyst-sdk", rev = "0bfb3f57c2b4b9c22cf41d582573e8e60352be05" }
 arm = { git = "https://github.com/dakewamama/arm", rev = "3b91100314473b616b5fd6f77214c6b6282a1dfb" }
 solana-account = { version = "=4.3.1", features = ["serde"] }
 solana-pubkey = { version = "=4.2.0", features = ["serde"] }

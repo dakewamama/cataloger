@@ -64,3 +64,28 @@
   order fixed-width BLOBs bytewise. Big-endian slot bytes preserve unsigned
   positions; an index over immutable rows avoids a separate mutable head table.
 - Reuse: DEPEND / PUBLIC API. No source copied.
+
+## Subscriptions deployment provenance
+
+- Source: https://github.com/solana-foundation/subscriptions,
+  revision `56de552a26a0f0af437c0ce5191b3309741cc596`, MIT.
+  [Official devnet run](https://github.com/solana-foundation/subscriptions/actions/runs/37008589067)
+  built that source with solana-verify 0.5.2, Agave 3.1.10 and platform-tools v1.52.
+  TARGETED SOURCE of the pinned release workflow; official build log inspected.
+- SDK `0bfb3f57c2b4b9c22cf41d582573e8e60352be05` records the locked native
+  rebuild and executable conformance proof. Reuse: PUBLIC API for semantic
+  dispatch; no upstream implementation source copied into the runtime.
+- Public devnet finalized capture at slot `509022453` retains both programs,
+  their ProgramData and Clock in one unsliced response. Raw response SHA256:
+  `794c6c9fbb35697eabf1931fb42440cca8b8a8dc2a42de95fb95b1a945651f53`.
+  Retained under `services/catalyst-indexer/tests/fixtures/` and EXECUTED LOCALLY
+  through journal dispatch/replay and rejection tests.
+- Subscriptions deploy `506642674` full payload hash `2675ad1d...` differs
+  from the older local fixture. Its verification hash `e705f5a3...` matches
+  the official build and local rebuild. Devnet SPL deploy `451008000` retains
+  the tested complete `8190d3f7...` payload. Runtime checks both complete hashes
+  and exact deployment selectors; verified-build normalization is not substituted.
+- Experience: a shared source/client version need not produce identical executables
+  across toolchains. A reproducible source link establishes code identity, while
+  current grant interpretation still needs native account and wallet evidence.
+  Missing grant state remains incomplete. No open-ended coverage is inferred.

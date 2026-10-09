@@ -139,8 +139,15 @@ coverage. An empty result does not establish that an address has no authorizatio
 Current scope endpoints describe the latest observed slot, with no claim about
 unobserved changes since that slot or completeness across scopes. Native fixture
 deployments cannot interpret finalized live observations. Classic SPL's observed
-deployment matches the tested ELF; Subscriptions and Token-2022 live versions remain
-unsupported. The retained mainnet capture proves a null source account and verified
+mainnet and devnet deployments match the tested ELF. The devnet Subscriptions
+deployment at slot 506642674 matches the official verified build and reproduces
+the SDK's native fixture transitions and management round trips. Its retained
+finalized capture binds both programs, their ProgramData and Clock at slot
+509022453. Only exact verified deployment/hash pairs and bounded catalog records
+are accepted. Token-2022 live versions remain unsupported.
+The devnet capture proves program identity and leaves grant accounts unobserved;
+its projection is Incomplete, with partial coverage. The retained mainnet capture
+proves a null source account and verified
 SPL identity at one bank, not a live delegate grant or complete address coverage.
 Continuous ingestion, repair and complete address coverage remain
 outstanding. ARM amounts remain integer base units; clients must preserve 64-bit values.

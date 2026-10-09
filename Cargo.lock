@@ -471,7 +471,7 @@ dependencies = [
 [[package]]
 name = "catalyst-sdk"
 version = "0.1.0"
-source = "git+https://github.com/dakewamama/catalyst-sdk?rev=db2e41047854022a0c9a998e66fd6edbfe89dfa5#db2e41047854022a0c9a998e66fd6edbfe89dfa5"
+source = "git+https://github.com/dakewamama/catalyst-sdk?rev=0bfb3f57c2b4b9c22cf41d582573e8e60352be05#0bfb3f57c2b4b9c22cf41d582573e8e60352be05"
 dependencies = [
  "arm",
  "solana-account 4.3.1",

@@ -12,7 +12,7 @@ Source: https://github.com/dakewamama/catalyst-sdk/tree/b3682df29b3b6c64e9fcf96b
 | `subscriptions-plan-arm.json` | `f039cd349d944b9a05851cd9210337ea3893f0db2c95cab77e3272c4b62d80cf` |
 
 Catalog adapter-source URLs identify the executed SDK implementation at
-`db2e41047854022a0c9a998e66fd6edbfe89dfa5`. Fixture provenance remains at
+`0bfb3f57c2b4b9c22cf41d582573e8e60352be05`. Fixture provenance remains at
 `b3682df29b3b6c64e9fcf96b35a6dd23fa552759`; the raw accounts are unchanged.
 
 `spl-delegate.bin`, `spl-delegate.json`, and `subscriptions-plan-arm.json` are
@@ -76,3 +76,25 @@ This is an actual absence observation, not a fabricated live token/delegate gran
 Mutation cases explicitly alter this capture to test rejection of changed code,
 loader metadata, malformed responses and missing evidence. Native delegate/revoke
 behavior remains proven by the SDK's separate executable fixtures.
+
+## Finalized devnet deployment capture
+
+`devnet-subscriptions-response.json` is the complete unmodified public devnet
+`getMultipleAccounts` response captured October 9, 2026. It retains Subscriptions,
+SPL, both canonical ProgramData accounts and Clock from finalized slot `509022453`.
+The metadata file records the exact address order, genesis, request configuration
+and response SHA256 `794c6c9fbb35697eabf1931fb42440cca8b8a8dc2a42de95fb95b1a945651f53`.
+These are program observations; no live grant or token account is fabricated.
+
+Subscriptions deployment slot `506642674` has full payload SHA256
+`2675ad1d2b5068d47fc5d169156cf4859a9c21c0406ce63e3828e3b7320fddbf`.
+Its trailing-zero-normalized executable hash matches the official deployment
+job and the local pinned source/toolchain rebuild. The runtime checks the full
+payload, including allocation padding. Devnet SPL deployment slot `451008000`
+has the same full payload as the tested classic token ELF.
+
+Tests select explicitly unobserved target accounts to prove that verified code
+does not establish a grant: dispatch reaches missing-state handling and stores
+Incomplete. Changed payloads fail before native grant decoding; missing ProgramData
+or Clock remains incomplete. Catalog intervals cover only the captured slot.
+Native authority/control behavior is separately executed in SDK `0bfb3f5`.

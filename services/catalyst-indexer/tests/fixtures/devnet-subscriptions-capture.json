@@ -1,0 +1,27 @@
+{
+  "rpc": "https://api.devnet.solana.com",
+  "cluster": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  "keys": [
+    "De1egAFMkMWZSN5rYXRj9CAdheBamobVNubTsi9avR44",
+    "HaYb5J9eXooZuNzN3z6TfuzVDcaTfiDdDPWCFtexFfMg",
+    "SysvarC1ock11111111111111111111111111111111",
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    "3gvYRKWyXRR9xKWe1ZjPhLY5ZJRN7KDB4rFZFGoJfFk2"
+  ],
+  "config": {
+    "encoding": "base64",
+    "commitment": "finalized",
+    "minContextSlot": 506642674
+  },
+  "slot": 509022453,
+  "unix_timestamp": 1791511613,
+  "program": "De1egAFMkMWZSN5rYXRj9CAdheBamobVNubTsi9avR44",
+  "programdata": "HaYb5J9eXooZuNzN3z6TfuzVDcaTfiDdDPWCFtexFfMg",
+  "deployment_slot": 506642674,
+  "payload_bytes": 133280,
+  "payload_sha256": "2675ad1d2b5068d47fc5d169156cf4859a9c21c0406ce63e3828e3b7320fddbf",
+  "verification_sha256": "e705f5a309f84f849b402f20de4bea5f2cc1d1d4f691ba7caabcb07c8b46af51",
+  "response_sha256": "794c6c9fbb35697eabf1931fb42440cca8b8a8dc2a42de95fb95b1a945651f53",
+  "spl_owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+  "spl_programdata_present": true
+}

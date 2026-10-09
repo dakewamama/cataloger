@@ -25,7 +25,7 @@ use std::{
 
 pub mod rpc;
 
-pub const SDK_REVISION: &str = "db2e41047854022a0c9a998e66fd6edbfe89dfa5";
+pub const SDK_REVISION: &str = "0bfb3f57c2b4b9c22cf41d582573e8e60352be05";
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
