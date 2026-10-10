@@ -1,5 +1,12 @@
 use crate::{Coverage, Error, Journal, Observation, Origin, Snapshot, Target};
 use arm::AuthorizationChange;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::post,
+};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use cataloger::{Catalog, ProgramVersion};
 use catalyst_sdk::{self as sdk, Adapter, Error as AdapterError, spl, subscriptions};
 use serde::{Deserialize, Serialize};
@@ -20,7 +27,7 @@ use solana_rpc_client_api::{
 use solana_sdk_ids::{bpf_loader_upgradeable, sysvar};
 use solana_transaction::Transaction;
 use spl_token_interface::state::Account as TokenAccount;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 /// Interpret an ELF with Agave 3.1.10's explicit local environment, not a live-bank claim.
 pub fn executable_identity(
@@ -189,6 +196,7 @@ pub struct SimulatedRevoke {
     pub sdk_revision: String,
     pub arm_schema_version: &'static str,
     pub transaction: Transaction,
+    pub signing_transaction: String,
     pub config: RpcSimulateTransactionConfig,
     pub response: Response<RpcSimulateTransactionResult>,
     pub changes: Vec<AuthorizationChange>,
@@ -342,6 +350,26 @@ pub async fn simulate_revoke(
         &after_state,
         &observed,
     )?;
+    let replacement = response
+        .value
+        .replacement_blockhash
+        .as_ref()
+        .filter(|replacement| replacement.last_valid_block_height > 0)
+        .ok_or(Error::InvalidObservation(
+            "missing simulation blockhash lifetime",
+        ))?;
+    let mut signing_transaction = transaction.clone();
+    signing_transaction.message.recent_blockhash = replacement
+        .blockhash
+        .parse()
+        .map_err(|_| Error::InvalidObservation("invalid simulation blockhash"))?;
+    if signing_transaction.message.recent_blockhash == Default::default() {
+        return Err(Error::InvalidObservation("invalid simulation blockhash"));
+    }
+    let signing_transaction = STANDARD.encode(
+        bincode::serialize(&signing_transaction)
+            .map_err(|_| Error::InvalidObservation("transaction encoding failed"))?,
+    );
     // A checkpoint observed during RPC must invalidate the older simulation input.
     if journal
         .latest(&snapshot.scope_id()?)
@@ -364,10 +392,58 @@ pub async fn simulate_revoke(
         sdk_revision: record.sdk_revision,
         arm_schema_version: arm::SCHEMA_VERSION,
         transaction,
+        signing_transaction,
         config,
         response,
         changes,
     })
+}
+
+pub fn action_router(journal: Journal, client: RpcClient) -> Router {
+    Router::new()
+        .route("/snapshots/:id/actions/revoke/:source", post(revoke))
+        .with_state((journal, Arc::new(client)))
+}
+
+async fn revoke(
+    State((journal, client)): State<(Journal, Arc<RpcClient>)>,
+    Path((id, source)): Path<(String, String)>,
+) -> Result<Json<SimulatedRevoke>, (StatusCode, Json<serde_json::Value>)> {
+    let source = source.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid token account address"})),
+        )
+    })?;
+    simulate_revoke(&client, &journal, &id, source)
+        .await
+        .map(Json)
+        .map_err(|error| {
+            let status = match &error {
+                Error::NotFound => StatusCode::NOT_FOUND,
+                Error::Conflict
+                | Error::AmbiguousScope
+                | Error::InvalidObservation("simulation/context slot mismatch") => {
+                    StatusCode::CONFLICT
+                }
+                Error::Rpc(_) => StatusCode::BAD_GATEWAY,
+                Error::Adapter(_) | Error::InvalidObservation(_) | Error::SimulationFailed(_) => {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            let body = match error {
+                Error::SimulationFailed(response) => {
+                    serde_json::json!({"error": "Native simulation failed", "response": response})
+                }
+                _ if status == StatusCode::INTERNAL_SERVER_ERROR => {
+                    serde_json::json!({"error": "Journal verification failed"})
+                }
+                Error::Rpc(_) => serde_json::json!({"error": "Simulation provider unavailable"}),
+                error => serde_json::json!({"error": error.to_string()}),
+            };
+            (status, Json(body))
+        })
 }
 
 pub(crate) fn verify_program(

@@ -1,5 +1,5 @@
 use cataloger::{Catalog, ProgramVersion};
-use catalyst_indexer::rpc::{Scope, observe, simulate_revoke};
+use catalyst_indexer::rpc::{Scope, action_router, observe, simulate_revoke};
 use catalyst_indexer::{Journal, Snapshot, router};
 use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -67,8 +67,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         [command, address] if command == "serve" => {
+            let mut app = router(journal.clone());
+            if let Ok(url) = std::env::var("RPC_URL") {
+                let client = RpcClient::new_with_timeout_and_commitment(
+                    url,
+                    Duration::from_secs(30),
+                    CommitmentConfig::finalized(),
+                );
+                app = app.merge(action_router(journal, client));
+            }
             let listener = tokio::net::TcpListener::bind(address).await?;
-            axum::serve(listener, router(journal))
+            axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = tokio::signal::ctrl_c().await;
                 })

@@ -1,5 +1,10 @@
 use arm::AuthorizationChange;
-use axum::{Json, Router, routing::post};
+use axum::{
+    Json, Router,
+    body::{Body, to_bytes},
+    http::{Request, StatusCode},
+    routing::post,
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cataloger::{AdapterRef, Catalog, ProgramVersion, Provenance, SchemaSource};
 use catalyst_indexer::{Error, Journal, Origin, Record, SDK_REVISION, Snapshot, Target, rpc};
@@ -21,6 +26,8 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tower::ServiceExt;
 
 mod support;
 
@@ -148,7 +155,7 @@ fn response(snapshot: &Snapshot) -> Value {
             "logs": ["Program log: Instruction: Revoke"],
             "accounts": [ui(&source), ui(account(owner())), ui(account(sysvar::clock::id()))],
             "unitsConsumed": null,
-            "replacementBlockhash": {"blockhash": "11111111111111111111111111111111", "lastValidBlockHeight": 100}
+            "replacementBlockhash": {"blockhash": "5LyjeY4xs2T6RWFAYsxXX3mb3znxqEwSzX4hLyHZxsVE", "lastValidBlockHeight": 100}
         }
     })
 }
@@ -167,6 +174,186 @@ fn client(reply: Value) -> RpcClient {
 
 async fn record(journal: &Journal) -> Record {
     journal.ingest(snapshot(), &catalog()).await.unwrap()
+}
+
+async fn action_request(app: Router, id: &str, source: &str) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::post(format!("/snapshots/{id}/actions/revoke/{source}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn action_api_returns_only_the_simulated_message_with_its_native_blockhash() {
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = record(&journal).await;
+    let reply = response(&record.snapshot);
+    let app = catalyst_indexer::router(journal.clone())
+        .merge(rpc::action_router(journal.clone(), client(reply.clone())));
+    let (status, result) = action_request(app, &record.id, &source().to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    let kit: Value =
+        serde_json::from_str(include_str!("fixtures/spl-revoke-signing.json")).unwrap();
+    assert_eq!(result["signing_transaction"], kit["signing_transaction"]);
+    let request: solana_transaction::Transaction =
+        serde_json::from_value(result["transaction"].clone()).unwrap();
+    let ready: solana_transaction::Transaction = bincode::deserialize(
+        &STANDARD
+            .decode(result["signing_transaction"].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let mut expected = request;
+    expected.message.recent_blockhash = reply["value"]["replacementBlockhash"]["blockhash"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(ready, expected);
+    assert_eq!(ready.message.account_keys[0], owner());
+    assert!(
+        ready
+            .signatures
+            .iter()
+            .all(|signature| *signature == Default::default())
+    );
+    assert_eq!(result["state_version"], record.id);
+    assert_eq!(result["changes"][0]["kind"], "removed");
+    assert_eq!(result["coverage"]["complete"], false);
+    assert_eq!(journal.replay(&record.id).await.unwrap(), record);
+}
+
+#[tokio::test]
+async fn malformed_or_missing_blockhash_lifetime_cannot_produce_a_signing_request() {
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = record(&journal).await;
+    for replacement in [
+        Value::Null,
+        json!({"blockhash": "invalid", "lastValidBlockHeight": 100}),
+        json!({"blockhash": "11111111111111111111111111111111", "lastValidBlockHeight": 100}),
+        json!({"blockhash": "5LyjeY4xs2T6RWFAYsxXX3mb3znxqEwSzX4hLyHZxsVE", "lastValidBlockHeight": 0}),
+    ] {
+        let mut reply = response(&record.snapshot);
+        reply["value"]["replacementBlockhash"] = replacement;
+        let (status, body) = action_request(
+            rpc::action_router(journal.clone(), client(reply)),
+            &record.id,
+            &source().to_string(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert!(body.get("signing_transaction").is_none());
+    }
+    assert_eq!(journal.replay(&record.id).await.unwrap(), record);
+}
+
+#[tokio::test]
+async fn action_api_distinguishes_bad_input_stale_state_and_provider_failures() {
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = record(&journal).await;
+    for (id, source, expected) in [
+        (record.id.as_str(), "invalid", StatusCode::BAD_REQUEST),
+        ("unknown", &source().to_string(), StatusCode::NOT_FOUND),
+        (
+            record.id.as_str(),
+            &source().to_string(),
+            StatusCode::BAD_GATEWAY,
+        ),
+    ] {
+        let (status, body) = action_request(
+            rpc::action_router(journal.clone(), RpcClient::new_mock("fails".into())),
+            id,
+            source,
+        )
+        .await;
+        assert_eq!(status, expected, "{body}");
+        assert!(body.get("signing_transaction").is_none());
+    }
+    let mut reply = response(&record.snapshot);
+    reply["context"]["slot"] = json!(SLOT + 1);
+    let (status, body) = action_request(
+        rpc::action_router(journal.clone(), client(reply)),
+        &record.id,
+        &source().to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.get("signing_transaction").is_none());
+    let mut next = record.snapshot.clone();
+    account(&mut next, owner()).lamports += 1;
+    journal.ingest(next, &catalog()).await.unwrap();
+    let (status, body) = action_request(
+        rpc::action_router(journal, RpcClient::new_mock("fails".into())),
+        &record.id,
+        &source().to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.get("signing_transaction").is_none());
+}
+
+#[tokio::test]
+async fn action_api_retains_native_failures_without_an_approved_signing_request() {
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = record(&journal).await;
+    let mut reply = response(&record.snapshot);
+    reply["value"]["err"] = json!({"InstructionError": [0, {"Custom": 1}]});
+    reply["value"]["accounts"] = json!([null, null, null]);
+    let (status, body) = action_request(
+        rpc::action_router(journal.clone(), client(reply.clone())),
+        &record.id,
+        &source().to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let native: solana_rpc_client_api::response::Response<
+        solana_rpc_client_api::response::RpcSimulateTransactionResult,
+    > = serde_json::from_value(reply).unwrap();
+    assert_eq!(body["response"], serde_json::to_value(native).unwrap());
+    assert!(body.get("signing_transaction").is_none());
+    assert_eq!(journal.replay(&record.id).await.unwrap(), record);
+}
+
+#[tokio::test]
+async fn action_api_requires_current_executable_evidence_and_semantic_agreement() {
+    for case in ["runtime-witness", "source-build", "unchanged-delegate"] {
+        let journal = Journal::open("sqlite::memory:").await.unwrap();
+        let mut version = version();
+        let mut reply = response(&snapshot());
+        match case {
+            "runtime-witness" => version.executable.as_mut().unwrap().runtime = None,
+            "source-build" => version.executable.as_mut().unwrap().source_revision = None,
+            "unchanged-delegate" => {
+                reply["value"]["accounts"][0] = ui(account(&mut snapshot(), source()));
+            }
+            _ => unreachable!(),
+        }
+        let record = journal
+            .ingest(snapshot(), &Catalog::new(vec![version]).unwrap())
+            .await
+            .unwrap();
+        let client = if case == "unchanged-delegate" {
+            client(reply)
+        } else {
+            RpcClient::new_mock("fails".into())
+        };
+        let (status, body) = action_request(
+            rpc::action_router(journal.clone(), client),
+            &record.id,
+            &source().to_string(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{case}: {body}");
+        assert!(body.get("signing_transaction").is_none());
+        assert_eq!(journal.replay(&record.id).await.unwrap(), record);
+    }
 }
 
 #[tokio::test]
@@ -687,7 +874,6 @@ async fn cli_uses_the_native_unsigned_rpc_contract_without_submitting_a_transact
     .await
     .unwrap()
     .unwrap();
-    server.abort();
     assert!(
         output.status.success(),
         "{}",
@@ -696,6 +882,53 @@ async fn cli_uses_the_native_unsigned_rpc_contract_without_submitting_a_transact
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["state_version"], record.id);
     assert_eq!(result["changes"][0]["kind"], "removed");
+    for enabled in [false, true] {
+        let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api_address = port.local_addr().unwrap();
+        drop(port);
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_authorization-api"));
+        command
+            .args(["serve", &api_address.to_string()])
+            .env("DATABASE_URL", &database)
+            .env_remove("RPC_URL")
+            .kill_on_drop(true);
+        if enabled {
+            command.env("RPC_URL", format!("http://{address}/"));
+        }
+        let mut child = command.spawn().unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(15), async {
+            let mut stream = loop {
+                if let Ok(stream) = tokio::net::TcpStream::connect(api_address).await {
+                    break stream;
+                }
+                assert!(child.try_wait().unwrap().is_none(), "API exited before listening");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            stream.write_all(format!(
+                "POST /snapshots/{}/actions/revoke/{} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                record.id, source()
+            ).as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await.unwrap();
+            response
+        }).await.unwrap();
+        child.kill().await.unwrap();
+        if enabled {
+            assert!(response.starts_with(b"HTTP/1.1 200"));
+            let offset = response
+                .windows(4)
+                .position(|bytes| bytes == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            assert_eq!(
+                serde_json::from_slice::<Value>(&response[offset..]).unwrap(),
+                result
+            );
+        } else {
+            assert!(response.starts_with(b"HTTP/1.1 404"));
+        }
+    }
+    server.abort();
     assert_eq!(
         journal
             .latest(&record.snapshot.scope_id().unwrap())
@@ -704,9 +937,12 @@ async fn cli_uses_the_native_unsigned_rpc_contract_without_submitting_a_transact
         Some(record)
     );
     let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 4);
     assert_eq!(requests[0]["method"], "getGenesisHash");
     assert_eq!(requests[1]["method"], "simulateTransaction");
+    assert_eq!(requests[2]["method"], "getGenesisHash");
+    assert_eq!(requests[3]["method"], "simulateTransaction");
+    assert_eq!(requests[1]["params"], requests[3]["params"]);
     let request = &requests[1]["params"];
     let transaction: solana_transaction::Transaction =
         bincode::deserialize(&STANDARD.decode(request[0].as_str().unwrap()).unwrap()).unwrap();

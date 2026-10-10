@@ -115,6 +115,27 @@ is retained in `response`. This is evidence of this simulation under RPC trust, 
 proof of wallet control or a guarantee about future execution. Other transactions and
 Subscriptions actions still require separate simulation support.
 
+`signing_transaction` is Base64-encoded native transaction bytes with empty signatures.
+It differs from the simulated request only by adopting the exact blockhash returned
+by the node. The lifetime is `response.value.replacementBlockhash.lastValidBlockHeight`.
+Missing, malformed or zero blockhash/lifetime metadata cannot produce a signing request.
+The original request and simulation hash remain intact. Wallets may modify messages;
+any changed message requires another simulation before sending. Expired transactions
+require a fresh request. The runtime neither signs nor submits this transaction.
+Consumers must preserve the lifetime's u64 value, use a sign-only wallet operation,
+and compare the returned message bytes with the reviewed message before submission.
+The fee payer is the token owner; a successful simulation does not prove ownership.
+
+When `RPC_URL` is configured, `serve` enables
+`POST /snapshots/{id}/actions/revoke/{token_account}` with no request body.
+It returns the same verified result as `simulate-revoke`, using the server's provider.
+Invalid addresses return 400, absent records/delegates 404, changed or ambiguous
+checkpoints and different simulation banks 409, unsupported state or failed native
+simulation 422, and provider failures 502. Native failures retain their typed response
+and return no signing request. Journal verification failures return 500.
+Executable/runtime evidence requirements also apply to this endpoint. Current public
+captures without that evidence remain incomplete and cannot produce signing bytes.
+
 `GET /snapshots/{id}` returns retained evidence and its projection.
 `GET /snapshots/{id}/authorizations/{address}` selects records that mention the
 address as principal, subject or resource. Compound principals remain intact;

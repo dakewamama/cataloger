@@ -35,6 +35,35 @@
   `ProgramCacheHitMaxLimit` alone does not prove capacity exhaustion. Warping to the
   deployment and observing a finalized descendant resolved the fixture failure.
   Reuse: PUBLIC API / PATTERN ONLY. No implementation source copied.
+- Wallet handoff: [official Kit signer semantics](https://www.solanakit.com/docs/advanced-guides/signers)
+  and [Wallet Standard signTransaction](https://github.com/anza-xyz/wallet-standard/blob/master/packages/core/features/src/signTransaction.ts)
+  inspected as TARGETED SOURCE. Modifying and sending signers may alter the message.
+  A simulation result cannot approve those alterations. The runtime exposes only the
+  canonical unsigned message with the node's exact replacement blockhash; signing,
+  mutation verification and submission remain caller responsibilities. No source copied.
+- Kit `@solana/kit` / `@solana/transactions` 8.4.0, MIT: TARGETED SOURCE of
+  transaction compilation and wire codec APIs, then EXECUTED LOCALLY to generate
+  `spl-revoke-signing.json` from existing native fixtures. Rust output must match
+  these independent Kit bytes. Reuse: PUBLIC API; no new runtime dependency.
+
+## Integration forks
+
+- [Pull fork](https://github.com/dakewamama/solana-pull-program), upstream
+  `blueshift-gg/solana-pull-program`, `ab0c0df6880a1048b72023b615033e5cca3c6bcc`, MIT.
+  TARGETED SOURCE: SDK `wallet.ts`, `e2e/fork.ts` and journey callers. The private Kit
+  8.4 SDK's approval descriptions interpret Pull instructions; they do not interpret ARM.
+  Reuse: PATTERN ONLY for approval review; fork retained for subsequent integration.
+- [Quasar fork](https://github.com/dakewamama/quasar-svm), upstream `blueshift-gg/quasar-svm`,
+  `b5a9363de13e0f1e5e4559f4251c77563c3c9986`, MIT. TARGETED SOURCE: `svm/Cargo.toml`,
+  execution/result and program-cache paths. Agave 4.1 instruction-chain execution with
+  all features enabled is a separate profile from the recorded Agave 3.1.10 evidence.
+  Reuse: candidate DEPEND; compatibility and conformance remain unverified.
+- [Microscope fork](https://github.com/dakewamama/solana-microscope), upstream
+  `solana-foundation/solana-microscope`, `fb225510424acc349446d61d2f4d6f7c2dc40dc4`, MIT.
+  TARGETED SOURCE: repository instructions, checkpoint and delivery paths. Generated
+  decoder crates require its generation workflow before building. Reuse: candidate
+  fork integration for recovery; no core code extracted or upstream tests run yet.
+  All fork parent relationships and default heads were verified. No source copied.
 
 ## SPL simulation fixture
 

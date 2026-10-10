@@ -1,5 +1,23 @@
 # Native snapshot evidence
 
+## Wallet wire compatibility
+
+`spl-revoke-signing.json` is compiled independently with `@solana/kit` 8.4.0.
+It uses the source and owner from `spl-snapshot.json` and the replacement blockhash
+from the retained Agave response in `spl-revoke-rpc.json`. The action API test requires
+byte-for-byte equality with this Kit transaction, including its empty signature slot.
+The fixture proves codec compatibility, not wallet ownership or live execution.
+
+To reproduce without adding Node dependencies to this Rust workspace:
+
+```sh
+npm install --prefix /tmp/velon-kit-handoff --ignore-scripts --no-audit --no-fund @solana/kit@8.4.0
+cp services/catalyst-indexer/tests/fixtures/generate-spl-revoke-signing.mjs /tmp/velon-kit-handoff/
+node /tmp/velon-kit-handoff/generate-spl-revoke-signing.mjs "$PWD/services/catalyst-indexer/tests/fixtures"
+```
+
+## Snapshot origins
+
 Extracted via `git show` from `tests/fixtures/` in the `catalyst-sdk` repository
 at commit `b3682df29b3b6c64e9fcf96b35a6dd23fa552759`.
 Source: https://github.com/dakewamama/catalyst-sdk/tree/b3682df29b3b6c64e9fcf96b35a6dd23fa552759/tests/fixtures
