@@ -7,6 +7,7 @@ fn record(start: u64, end: u64, version: &str) -> ProgramVersion {
         program_id: Pubkey::new_from_array([7; 32]),
         deployment: format!("fixture:deployment:{version}"),
         version: version.into(),
+        executable: None,
         supported_from_slot: start,
         supported_until_slot_exclusive: end,
         schema: SchemaSource {

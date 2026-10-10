@@ -22,6 +22,8 @@ use std::{
     time::Duration,
 };
 
+mod support;
+
 const SLOT: u64 = 454_547_887;
 const TIMESTAMP: i64 = 1_791_463_325;
 const AFTER: &[u8] = include_bytes!("fixtures/spl-revoke-after.bin");
@@ -68,11 +70,12 @@ fn snapshot() -> Snapshot {
 
 fn version() -> ProgramVersion {
     let program = spl::DelegateAdapter.protocol().program_id;
-    ProgramVersion {
+    let mut version = ProgramVersion {
         cluster: metadata()["cluster"].as_str().unwrap().into(),
         program_id: program,
         deployment: spl::LIVE_DEPLOYMENT.into(),
         version: spl::PROGRAM_VERSION.into(),
+        executable: None,
         supported_from_slot: SLOT,
         supported_until_slot_exclusive: SLOT + 2,
         schema: SchemaSource {
@@ -91,7 +94,16 @@ fn version() -> ProgramVersion {
             revision: "mollusk-svm:0.15.1".into(),
             evidence_reference: "fixture:spl-revoke-after.bin".into(),
         },
-    }
+    };
+    let snapshot = snapshot();
+    let account = &snapshot
+        .accounts
+        .iter()
+        .find(|(key, _)| *key == get_program_data_address(&program))
+        .unwrap()
+        .1;
+    support::attest_fixture(&mut version, &account.data[solana_loader_v3_interface::state::UpgradeableLoaderState::size_of_programdata_metadata()..], SLOT);
+    version
 }
 
 fn catalog() -> Catalog {
@@ -242,6 +254,11 @@ async fn agave_rpc_capture_agrees_with_the_native_transition() {
     version.provenance.source = "fixture:agave-rpc:3.1.10".into();
     version.provenance.revision = "agave:3.1.10".into();
     version.provenance.evidence_reference = "fixture:spl-revoke-rpc.json".into();
+    let elf = account(&mut before, programdata).data
+        [solana_loader_v3_interface::state::UpgradeableLoaderState::size_of_programdata_metadata(
+        )..]
+        .to_vec();
+    support::attest_fixture(&mut version, &elf, before.observation.slot);
     let journal = Journal::open("sqlite::memory:").await.unwrap();
     let record = journal
         .ingest(before, &Catalog::new(vec![version]).unwrap())

@@ -266,10 +266,7 @@ fn compile(snapshot: &Snapshot, catalog: &Catalog, id: &str) -> (Vec<ProgramVers
                         catalog,
                         id,
                         &mut versions,
-                    )?;
-                    if !adapter.supports(&grant_context.native) {
-                        return Err(sdk::Error::UnsupportedVersion);
-                    }
+                    );
                     let token_adapter = spl::DelegateAdapter;
                     let token_context = context(
                         token_adapter.protocol().program_id,
@@ -277,7 +274,18 @@ fn compile(snapshot: &Snapshot, catalog: &Catalog, id: &str) -> (Vec<ProgramVers
                         catalog,
                         id,
                         &mut versions,
-                    )?;
+                    );
+                    if [&grant_context, &token_context]
+                        .iter()
+                        .any(|result| matches!(result, Err(sdk::Error::UnsupportedVersion)))
+                    {
+                        return Err(sdk::Error::UnsupportedVersion);
+                    }
+                    let grant_context = grant_context?;
+                    let token_context = token_context?;
+                    if !adapter.supports(&grant_context.native) {
+                        return Err(sdk::Error::UnsupportedVersion);
+                    }
                     if !token_adapter.supports(&token_context.native) {
                         return Err(sdk::Error::UnsupportedVersion);
                     }
@@ -505,6 +513,7 @@ impl Journal {
             let record = self.get(&id).await?.ok_or(Error::ReplayMismatch)?;
             if record.snapshot.scope_id()? != scope_id
                 || record.snapshot.observation.slot.to_be_bytes().as_slice() != slot.as_slice()
+                || record.runtime_version != RUNTIME_VERSION
             {
                 return Err(Error::ReplayMismatch);
             }

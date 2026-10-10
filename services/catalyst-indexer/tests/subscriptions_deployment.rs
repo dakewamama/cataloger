@@ -81,6 +81,10 @@ fn versions() -> Vec<ProgramVersion> {
             program_id: protocol.program_id,
             deployment: deployment.into(),
             version: version.into(),
+            executable: (schema == "subscriptions").then(|| {
+                serde_json::from_str(include_str!("fixtures/subscriptions-executable.json"))
+                    .unwrap()
+            }),
             supported_from_slot: SLOT,
             supported_until_slot_exclusive: SLOT + 1,
             schema: SchemaSource {

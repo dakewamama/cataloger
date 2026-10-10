@@ -8,6 +8,13 @@ use std::time::Duration;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if let [command, path] = args.as_slice()
+        && command == "inspect-executable"
+    {
+        let identity = catalyst_indexer::rpc::executable_identity(&std::fs::read(path)?)?;
+        println!("{}", serde_json::to_string_pretty(&identity)?);
+        return Ok(());
+    }
     let database_url = std::env::var("DATABASE_URL")?;
     let journal = Journal::open(&database_url).await?;
     match args.as_slice() {

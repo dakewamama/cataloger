@@ -6,3 +6,8 @@ edition = "2024"
 [dependencies]
 solana-pubkey = { version = "=4.2.0", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+solana-sbpf = { version = "=0.13.1", default-features = false }
+
+[dev-dependencies]
+serde_json = "1"

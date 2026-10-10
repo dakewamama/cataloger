@@ -332,7 +332,12 @@ async fn failed_projections_remain_distinct_and_retain_their_raw_evidence() {
             ),
         }
         if case == "unknown-version" {
-            assert_eq!(record.versions[0].version, "sha256:unverified-program");
+            assert!(
+                record
+                    .versions
+                    .iter()
+                    .any(|version| { version.version == "sha256:unverified-program" })
+            );
         }
         if case == "coverage-gap" {
             assert!(record.versions.is_empty());

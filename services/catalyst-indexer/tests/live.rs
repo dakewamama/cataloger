@@ -21,6 +21,8 @@ use std::{
     time::Duration,
 };
 
+mod support;
+
 const SLOT: u64 = 454_547_887;
 const DEPLOYED: u64 = 419_472_000;
 const TIMESTAMP: i64 = 1_791_463_325;
@@ -107,6 +109,7 @@ fn version() -> ProgramVersion {
         program_id: program(),
         deployment: DEPLOYMENT.into(),
         version: format!("sha256:{PROGRAM_HASH}"),
+        executable: None,
         supported_from_slot: SLOT,
         supported_until_slot_exclusive: SLOT + 1,
         schema: SchemaSource {
@@ -129,7 +132,23 @@ fn version() -> ProgramVersion {
 }
 
 fn catalog() -> Catalog {
-    Catalog::new(vec![version()]).unwrap()
+    let mut version = version();
+    let response: Value = serde_json::from_slice(RAW).unwrap();
+    let index = metadata()["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|key| key.as_str() == Some(&programdata().to_string()))
+        .unwrap();
+    let account: UiAccount =
+        serde_json::from_value(response["result"]["value"][index].clone()).unwrap();
+    let account: Account = account.to_account().unwrap();
+    support::attest_fixture(
+        &mut version,
+        &account.data[UpgradeableLoaderState::size_of_programdata_metadata()..],
+        SLOT,
+    );
+    Catalog::new(vec![version]).unwrap()
 }
 
 fn account(snapshot: &mut Snapshot, key: Pubkey) -> &mut Account {
@@ -257,7 +276,10 @@ async fn captured_native_bytes_compile_and_replay_as_empty_partial_live_evidence
     assert_eq!(spl::PROGRAM_VERSION, format!("sha256:{PROGRAM_HASH}"));
     assert_eq!(spl::LIVE_DEPLOYMENT, DEPLOYMENT);
     let journal = Journal::open("sqlite::memory:").await.unwrap();
-    let record = journal.ingest(snapshot.clone(), &catalog()).await.unwrap();
+    let record = journal
+        .ingest(snapshot.clone(), &Catalog::new(vec![version()]).unwrap())
+        .await
+        .unwrap();
     assert_eq!(record.snapshot, snapshot);
     assert!(!record.coverage_complete);
     assert_eq!(record.versions, vec![version()]);
@@ -268,12 +290,7 @@ async fn captured_native_bytes_compile_and_replay_as_empty_partial_live_evidence
             Sha256::digest(serde_json::to_vec(&snapshot).unwrap())
         )
     );
-    assert_eq!(
-        record.projection,
-        Projection::Compiled {
-            authorizations: vec![]
-        }
-    );
+    assert!(matches!(record.projection, Projection::Incomplete { .. }));
     assert_eq!(journal.get(&record.id).await.unwrap(), Some(record.clone()));
     assert_eq!(journal.replay(&record.id).await.unwrap(), record);
 }
@@ -598,6 +615,10 @@ async fn executable_hash_deployment_and_catalog_identity_fail_closed() {
     ] {
         let mut input = snapshot.clone();
         let mut version = version();
+        let elf = account(&mut input, programdata()).data
+            [UpgradeableLoaderState::size_of_programdata_metadata()..]
+            .to_vec();
+        support::attest_fixture(&mut version, &elf, input.observation.slot);
         match case {
             "executable-bytes" => *account(&mut input, programdata()).data.last_mut().unwrap() ^= 1,
             "program-owner" => account(&mut input, program()).owner = Pubkey::default(),
@@ -707,12 +728,7 @@ async fn malformed_loader_accounts_are_invalid_and_new_code_is_visible_after_dep
         if slot == DEPLOYED {
             assert!(matches!(record.projection, Projection::Unsupported { .. }));
         } else {
-            assert_eq!(
-                record.projection,
-                Projection::Compiled {
-                    authorizations: vec![]
-                }
-            );
+            assert!(matches!(record.projection, Projection::Incomplete { .. }));
         }
         assert_eq!(journal.replay(&record.id).await.unwrap(), record);
     }

@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use solana_pubkey::Pubkey;
 
+pub mod executable;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchemaSource {
@@ -40,6 +42,8 @@ pub struct ProgramVersion {
     pub schema: SchemaSource,
     pub adapter: AdapterRef,
     pub provenance: Provenance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<executable::ExecutableEvidence>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +51,7 @@ pub enum Error {
     UnsupportedVersion,
     InvalidRecord,
     OverlappingHistory,
+    InsufficientExecutableEvidence,
 }
 
 impl std::fmt::Display for Error {

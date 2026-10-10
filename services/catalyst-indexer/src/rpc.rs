@@ -22,6 +22,21 @@ use solana_transaction::Transaction;
 use spl_token_interface::state::Account as TokenAccount;
 use std::collections::BTreeSet;
 
+/// Interpret an ELF with Agave 3.1.10's explicit local environment, not a live-bank claim.
+pub fn executable_identity(
+    elf: &[u8],
+) -> Result<cataloger::executable::ExecutableIdentity, Box<dyn std::error::Error>> {
+    let loader = agave_syscalls::create_program_runtime_environment_v1(
+        &solana_svm_feature_set::SVMFeatureSet::all_enabled(),
+        &solana_program_runtime::execution_budget::SVMTransactionExecutionBudget::new_with_defaults(
+            true,
+        ),
+        false,
+        false,
+    )?;
+    cataloger::executable::inspect(elf, std::sync::Arc::new(loader))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scope {
@@ -421,5 +436,13 @@ pub(crate) fn verify_program(
     {
         return Err(AdapterError::UnsupportedVersion);
     }
+    let identity =
+        executable_identity(&data.data[offset..]).map_err(|_| AdapterError::UnsupportedVersion)?;
+    version
+        .verify_execution(programdata_address, observed.slot, &identity)
+        .map_err(|error| match error {
+            cataloger::Error::InsufficientExecutableEvidence => AdapterError::InsufficientEvidence,
+            _ => AdapterError::UnsupportedVersion,
+        })?;
     Ok(())
 }

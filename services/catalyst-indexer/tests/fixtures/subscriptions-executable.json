@@ -1,0 +1,53 @@
+{
+  "programdata_address": [
+    246,
+    82,
+    223,
+    164,
+    113,
+    182,
+    40,
+    216,
+    82,
+    89,
+    182,
+    106,
+    48,
+    38,
+    184,
+    151,
+    73,
+    186,
+    46,
+    64,
+    33,
+    126,
+    54,
+    218,
+    255,
+    190,
+    234,
+    21,
+    99,
+    212,
+    59,
+    135
+  ],
+  "observed_slot": 509022453,
+  "source_revision": "56de552a26a0f0af437c0ce5191b3309741cc596",
+  "build_toolchain": "solana-verify 0.5.2; Agave 3.1.10; platform-tools v1.52 (rustc 1.89.0); locked Cargo build",
+  "identity": {
+    "raw_elf_hash": "sha256:2675ad1d2b5068d47fc5d169156cf4859a9c21c0406ce63e3828e3b7320fddbf",
+    "sbpf_version": 0,
+    "relocations": {
+      "8": 250,
+      "10": 48
+    },
+    "loader_revision": "acd2c551a0f8df2a8f077a6e4b55f546d4deb98d",
+    "environment_hash": "sha256:086926d070fe65008bc371b60acc270a9bac544063eebddaed769fd058618caa",
+    "loaded_text_hash": "sha256:1a1599901b2a60f30439f124e885d4b74d7b4162bb8600fe305d3c92705e4695",
+    "loaded_ro_hash": "sha256:5264fe14b36e64a47d5c64d9207d57041334fd580dea7b7e0a5c570405ea0bf0",
+    "effective_executable_hash": "sha256:c7b657c1af45e65827213bb63da361081e5246440d56298bfb0c7e656f806cc2"
+  },
+  "runtime": null
+}
