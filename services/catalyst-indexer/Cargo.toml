@@ -25,7 +25,8 @@ solana-rpc-client = { version = "=4.2.2", default-features = false, features = [
 solana-rpc-client-api = "=4.2.2"
 solana-account-decoder-client-types = { version = "=4.2.2", features = ["agave-unstable-api"] }
 solana-commitment-config = "=3.1.1"
-solana-transaction = { version = "=4.1.6", features = ["serde", "wincode"] }
+solana-transaction = { version = "=4.1.6", features = ["serde", "wincode", "verify"] }
+solana-transaction-status-client-types = { version = "=4.2.2", features = ["agave-unstable-api"] }
 sha2 = "0.10"
 agave-syscalls = { version = "=3.1.10", features = ["agave-unstable-api"] }
 solana-program-runtime = { version = "=3.1.10", features = ["agave-unstable-api"] }
@@ -40,3 +41,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
 tower = { version = "0.4", features = ["util"] }
 dotenvy = "0.15"
+
+[dev-dependencies]
+solana-keypair = "=3.1.2"
+solana-signer = "=3.0.1"

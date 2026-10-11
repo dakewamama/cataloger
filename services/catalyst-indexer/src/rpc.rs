@@ -1,4 +1,4 @@
-use crate::{Coverage, Error, Journal, Observation, Origin, Snapshot, Target};
+use crate::{Coverage, Error, Journal, Observation, Origin, Record, Snapshot, Target};
 use arm::AuthorizationChange;
 use axum::{
     Json, Router,
@@ -21,11 +21,17 @@ use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client_api::{
     config::{
         RpcAccountInfoConfig, RpcSimulateTransactionAccountsConfig, RpcSimulateTransactionConfig,
+        RpcTransactionConfig,
     },
+    request::RpcRequest,
     response::{Response, RpcSimulateTransactionResult},
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, sysvar};
 use solana_transaction::Transaction;
+use solana_transaction_status_client_types::{
+    EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, TransactionBinaryEncoding,
+    UiTransactionEncoding,
+};
 use spl_token_interface::state::Account as TokenAccount;
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -399,10 +405,187 @@ pub async fn simulate_revoke(
     })
 }
 
+#[derive(Serialize)]
+pub struct VerifiedRevoke {
+    pub state_version: String,
+    pub transaction: EncodedConfirmedTransactionWithStatusMeta,
+    pub observation: Record,
+    pub changes: Vec<AuthorizationChange>,
+}
+
+/// Verify a finalized canonical revoke and a later scoped observation.
+/// The observation is not the transaction's immediate post-state.
+pub async fn verify_revoke(
+    client: &RpcClient,
+    journal: &Journal,
+    id: &str,
+    source: Pubkey,
+    signed_transaction: &str,
+) -> Result<VerifiedRevoke, Error> {
+    let record = journal.replay(id).await?;
+    let snapshot = &record.snapshot;
+    if snapshot.observation.origin != Origin::Finalized || !client.commitment().is_finalized() {
+        return Err(Error::InvalidObservation("finalized evidence required"));
+    }
+    if snapshot.targets != [Target::SplDelegate { source }] {
+        return Err(AdapterError::UnsupportedOperation.into());
+    }
+    let signed =
+        EncodedTransaction::Binary(signed_transaction.into(), TransactionBinaryEncoding::Base64)
+            .decode()
+            .and_then(|transaction| transaction.into_legacy_transaction())
+            .ok_or(Error::InvalidObservation(
+                "invalid signed legacy transaction",
+            ))?;
+    let supplied = STANDARD
+        .decode(signed_transaction)
+        .map_err(|_| Error::InvalidObservation("invalid transaction encoding"))?;
+    let canonical = bincode::serialize(&signed)
+        .map_err(|_| Error::InvalidObservation("transaction encoding failed"))?;
+    if supplied != canonical {
+        return Err(Error::InvalidObservation("noncanonical signed transaction"));
+    }
+    signed
+        .verify()
+        .map_err(|_| Error::InvalidObservation("invalid transaction signature"))?;
+    let catalog = Catalog::new(record.versions.clone()).map_err(|_| Error::ReplayMismatch)?;
+    let adapter = spl::DelegateAdapter;
+    let context = crate::context(
+        adapter.protocol().program_id,
+        snapshot,
+        &catalog,
+        id,
+        &mut Vec::new(),
+    )?;
+    let before = crate::spl_state(snapshot, source)?;
+    let authorization = sdk::compile_state(&adapter, &before, &context)?
+        .into_iter()
+        .next()
+        .ok_or(Error::NotFound)?;
+    let action = sdk::actions(&adapter, &authorization, &before, &context)?.remove(0);
+    let native = TokenAccount::unpack(&before.account.data)
+        .map_err(|error| AdapterError::InvalidState(error.to_string()))?;
+    let mut expected = Transaction::new_with_payer(&action.instructions, Some(&native.owner));
+    expected.message.recent_blockhash = signed.message.recent_blockhash;
+    if signed.message != expected.message {
+        return Err(AdapterError::DiffMismatch.into());
+    }
+    if client.get_genesis_hash().await?.to_string() != snapshot.observation.cluster {
+        return Err(Error::InvalidObservation("cluster genesis mismatch"));
+    }
+    let transaction: Option<EncodedConfirmedTransactionWithStatusMeta> = client
+        .send(
+            RpcRequest::GetTransaction,
+            serde_json::json!([
+                signed.signatures[0].to_string(),
+                RpcTransactionConfig {
+                    encoding: Some(UiTransactionEncoding::Base64),
+                    commitment: Some(client.commitment()),
+                    max_supported_transaction_version: None,
+                }
+            ]),
+        )
+        .await?;
+    let transaction = transaction.ok_or(Error::NotFound)?;
+    let executed = transaction
+        .transaction
+        .transaction
+        .decode()
+        .and_then(|transaction| transaction.into_legacy_transaction())
+        .ok_or(Error::InvalidObservation("invalid finalized transaction"))?;
+    if executed != signed || transaction.slot <= snapshot.observation.slot {
+        return Err(Error::InvalidObservation("finalized transaction mismatch"));
+    }
+    let meta = transaction
+        .transaction
+        .meta
+        .as_ref()
+        .ok_or(Error::InvalidObservation(
+            "missing transaction execution metadata",
+        ))?;
+    if meta.err.is_some() || meta.status.is_err() {
+        return Err(Error::InvalidObservation("finalized transaction failed"));
+    }
+    let after = observe(
+        client,
+        Scope {
+            cluster: snapshot.observation.cluster.clone(),
+            accounts: snapshot.accounts.iter().map(|(key, _)| *key).collect(),
+            targets: snapshot.targets.clone(),
+            min_context_slot: Some(transaction.slot),
+        },
+    )
+    .await?;
+    // Retain upgrades and incomplete evidence too, so stale grants stop being current.
+    let observation = journal.ingest(after, &catalog).await?;
+    let after_context = crate::context(
+        adapter.protocol().program_id,
+        &observation.snapshot,
+        &catalog,
+        &observation.id,
+        &mut Vec::new(),
+    )?;
+    let after_state = crate::spl_state(&observation.snapshot, source)?;
+    let mut expected = native;
+    expected.delegate = None.into();
+    expected.delegated_amount = 0;
+    let mut expected_data = before.account.data.clone();
+    TokenAccount::pack(expected, &mut expected_data)
+        .map_err(|error| AdapterError::InvalidState(error.to_string()))?;
+    if after_state.account.data != expected_data {
+        return Err(AdapterError::DiffMismatch.into());
+    }
+    let changes = sdk::verify_transaction_diff(
+        &adapter,
+        &action.instructions,
+        &before,
+        &context,
+        &after_state,
+        &after_context,
+    )?;
+    if journal
+        .latest(&snapshot.scope_id()?)
+        .await?
+        .is_none_or(|latest| latest.id != observation.id)
+    {
+        return Err(Error::Conflict);
+    }
+    Ok(VerifiedRevoke {
+        state_version: record.id,
+        transaction,
+        observation,
+        changes,
+    })
+}
+
 pub fn action_router(journal: Journal, client: RpcClient) -> Router {
     Router::new()
         .route("/snapshots/:id/actions/revoke/:source", post(revoke))
+        .route("/snapshots/:id/actions/revoke/:source/verify", post(verify))
         .with_state((journal, Arc::new(client)))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignedRevoke {
+    signed_transaction: String,
+}
+
+async fn verify(
+    State((journal, client)): State<(Journal, Arc<RpcClient>)>,
+    Path((id, source)): Path<(String, String)>,
+    Json(request): Json<SignedRevoke>,
+) -> Result<Json<VerifiedRevoke>, (StatusCode, Json<serde_json::Value>)> {
+    let source = source.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid token account address"})),
+        )
+    })?;
+    verify_revoke(&client, &journal, &id, source, &request.signed_transaction)
+        .await
+        .map(Json)
+        .map_err(action_error)
 }
 
 async fn revoke(
@@ -418,32 +601,32 @@ async fn revoke(
     simulate_revoke(&client, &journal, &id, source)
         .await
         .map(Json)
-        .map_err(|error| {
-            let status = match &error {
-                Error::NotFound => StatusCode::NOT_FOUND,
-                Error::Conflict
-                | Error::AmbiguousScope
-                | Error::InvalidObservation("simulation/context slot mismatch") => {
-                    StatusCode::CONFLICT
-                }
-                Error::Rpc(_) => StatusCode::BAD_GATEWAY,
-                Error::Adapter(_) | Error::InvalidObservation(_) | Error::SimulationFailed(_) => {
-                    StatusCode::UNPROCESSABLE_ENTITY
-                }
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            let body = match error {
-                Error::SimulationFailed(response) => {
-                    serde_json::json!({"error": "Native simulation failed", "response": response})
-                }
-                _ if status == StatusCode::INTERNAL_SERVER_ERROR => {
-                    serde_json::json!({"error": "Journal verification failed"})
-                }
-                Error::Rpc(_) => serde_json::json!({"error": "Simulation provider unavailable"}),
-                error => serde_json::json!({"error": error.to_string()}),
-            };
-            (status, Json(body))
-        })
+        .map_err(action_error)
+}
+
+fn action_error(error: Error) -> (StatusCode, Json<serde_json::Value>) {
+    let status = match &error {
+        Error::NotFound => StatusCode::NOT_FOUND,
+        Error::Conflict
+        | Error::AmbiguousScope
+        | Error::InvalidObservation("simulation/context slot mismatch") => StatusCode::CONFLICT,
+        Error::Rpc(_) => StatusCode::BAD_GATEWAY,
+        Error::Adapter(_) | Error::InvalidObservation(_) | Error::SimulationFailed(_) => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    let body = match error {
+        Error::SimulationFailed(response) => {
+            serde_json::json!({"error": "Native simulation failed", "response": response})
+        }
+        _ if status == StatusCode::INTERNAL_SERVER_ERROR => {
+            serde_json::json!({"error": "Journal verification failed"})
+        }
+        Error::Rpc(_) => serde_json::json!({"error": "RPC provider unavailable"}),
+        error => serde_json::json!({"error": error.to_string()}),
+    };
+    (status, Json(body))
 }
 
 pub(crate) fn verify_program(

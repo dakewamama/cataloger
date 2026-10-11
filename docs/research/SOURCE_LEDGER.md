@@ -45,6 +45,20 @@
   transaction compilation and wire codec APIs, then EXECUTED LOCALLY to generate
   `spl-revoke-signing.json` from existing native fixtures. Rust output must match
   these independent Kit bytes. Reuse: PUBLIC API; no new runtime dependency.
+- Finalized verification: TARGETED SOURCE of Agave client/types `4.2.2` at the
+  revision above, `EncodedTransaction::decode` and finalized `getTransaction` RPC
+  configuration. Official [getTransaction](https://solana.com/docs/rpc/http/gettransaction)
+  permits null when unavailable at the requested commitment; typed optional replies
+  preserve that distinction. Native decode sanitizes before accepting the transaction.
+- `solana-transaction 4.1.6`, Apache-2.0, source
+  `7cb94379935d371492201db63cb316d1c178bcec`: TARGETED SOURCE of `Transaction::verify`,
+  versioned sanitization and legacy conversion. DEPEND: enable its verify feature;
+  do not implement signature cryptography or wire parsing locally. No source copied.
+- Verification tests combine the native SPL revoke account golden with local signing
+  keys and explicitly synthetic finalized RPC receipts. HTTP transport tests assert
+  finalized commitment, the execution-slot floor and absence of submit calls. A later
+  account snapshot is not immediate transaction post-state; both slots remain visible.
+  Unknown upgrades are journaled and cannot leave old grants presented as current.
 
 ## Integration forks
 

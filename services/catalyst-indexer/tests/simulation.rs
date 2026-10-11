@@ -15,13 +15,18 @@ use solana_account::Account;
 use solana_account_decoder_client_types::UiAccount;
 use solana_clock::Clock;
 use solana_commitment_config::CommitmentConfig;
+use solana_keypair::Keypair;
 use solana_loader_v3_interface::get_program_data_address;
+use solana_program_pack::Pack;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::{
     mock_sender::MockSender, nonblocking::rpc_client::RpcClient, rpc_client::RpcClientConfig,
 };
 use solana_rpc_client_api::request::RpcRequest;
 use solana_sdk_ids::sysvar;
+use solana_signer::Signer;
+use solana_transaction::Transaction;
+use spl_token_interface::state::Account as TokenAccount;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -964,4 +969,398 @@ async fn cli_uses_the_native_unsigned_rpc_contract_without_submitting_a_transact
             sysvar::clock::id().to_string()
         ])
     );
+}
+
+fn verification_fixture() -> (Snapshot, Snapshot, Transaction) {
+    let signer = Keypair::new_from_array([7; 32]);
+    let mut before = snapshot();
+    before
+        .accounts
+        .iter_mut()
+        .find(|(key, _)| *key == owner())
+        .unwrap()
+        .0 = signer.pubkey();
+    let token = account(&mut before, source());
+    let mut native = TokenAccount::unpack(&token.data).unwrap();
+    native.owner = signer.pubkey();
+    TokenAccount::pack(native, &mut token.data).unwrap();
+    let mut after = before.clone();
+    let token = account(&mut after, source());
+    token.data = AFTER.into();
+    let mut native = TokenAccount::unpack(&token.data).unwrap();
+    native.owner = signer.pubkey();
+    TokenAccount::pack(native, &mut token.data).unwrap();
+    after.observation.slot += 1;
+    after.observation.bank = format!("rpc:finalized:{}", after.observation.slot);
+    let clock = account(&mut after, sysvar::clock::id());
+    let mut value: Clock = bincode::deserialize(&clock.data).unwrap();
+    value.slot += 1;
+    clock.data = bincode::serialize(&value).unwrap();
+    let instruction = spl_token_interface::instruction::revoke(
+        &spl::DelegateAdapter.protocol().program_id,
+        &source(),
+        &signer.pubkey(),
+        &[],
+    )
+    .unwrap();
+    let transaction = Transaction::new_signed_with_payer(
+        &[instruction],
+        Some(&signer.pubkey()),
+        &[&signer],
+        "5LyjeY4xs2T6RWFAYsxXX3mb3znxqEwSzX4hLyHZxsVE"
+            .parse()
+            .unwrap(),
+    );
+    (before, after, transaction)
+}
+
+fn receipt(transaction: &Transaction) -> Value {
+    json!({
+        "slot": SLOT + 1,
+        "transaction": [STANDARD.encode(bincode::serialize(transaction).unwrap()), "base64"],
+        "meta": { "err": null, "status": {"Ok": null}, "fee": 5000,
+                  "preBalances": [1, 1, 1], "postBalances": [1, 1, 1] },
+        "blockTime": TIMESTAMP, "version": "legacy"
+    })
+}
+
+fn verification_client(receipt: Value, after: &Snapshot) -> RpcClient {
+    use solana_rpc_client::mock_sender::MocksMap;
+    let scope = rpc::Scope {
+        cluster: after.observation.cluster.clone(),
+        accounts: after.accounts.iter().map(|(key, _)| *key).collect(),
+        targets: after.targets.clone(),
+        min_context_slot: Some(SLOT + 1),
+    };
+    let values: Vec<_> = scope
+        .accounts()
+        .unwrap()
+        .iter()
+        .map(|key| {
+            after
+                .accounts
+                .iter()
+                .find(|(address, _)| address == key)
+                .map(|(_, account)| ui(account))
+                .unwrap_or(Value::Null)
+        })
+        .collect();
+    let mocks = MocksMap(
+        [
+            (
+                RpcRequest::GetGenesisHash,
+                [metadata()["cluster"].clone(), metadata()["cluster"].clone()].into(),
+            ),
+            (RpcRequest::GetTransaction, [receipt].into()),
+            (
+                RpcRequest::GetMultipleAccounts,
+                [json!({
+                    "context": {"slot": after.observation.slot}, "value": values
+                })]
+                .into(),
+            ),
+        ]
+        .into(),
+    );
+    RpcClient::new_sender(
+        MockSender::new_with_mocks_map("succeeds", mocks),
+        RpcClientConfig {
+            commitment_config: CommitmentConfig::finalized(),
+            ..RpcClientConfig::default()
+        },
+    )
+}
+
+#[tokio::test]
+async fn finalized_revoke_is_reobserved_and_replayable_without_submitting() {
+    let (before, after, transaction) = verification_fixture();
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = journal.ingest(before, &catalog()).await.unwrap();
+    let signed = STANDARD.encode(bincode::serialize(&transaction).unwrap());
+    let result = rpc::verify_revoke(
+        &verification_client(receipt(&transaction), &after),
+        &journal,
+        &record.id,
+        source(),
+        &signed,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.state_version, record.id);
+    assert_eq!(result.transaction.slot, SLOT + 1);
+    assert!(matches!(
+        &result.changes[..],
+        [AuthorizationChange::Removed { .. }]
+    ));
+    assert!(matches!(&result.observation.projection,
+        catalyst_indexer::Projection::Compiled { authorizations } if authorizations.is_empty()));
+    assert!(!result.observation.coverage_complete);
+    assert_eq!(
+        journal.replay(&result.observation.id).await.unwrap(),
+        result.observation
+    );
+    assert_eq!(
+        journal
+            .latest(&record.snapshot.scope_id().unwrap())
+            .await
+            .unwrap(),
+        Some(result.observation.clone())
+    );
+    let repeated = rpc::verify_revoke(
+        &verification_client(receipt(&transaction), &after),
+        &journal,
+        &record.id,
+        source(),
+        &signed,
+    )
+    .await
+    .unwrap();
+    assert_eq!(repeated.observation, result.observation);
+}
+
+#[tokio::test]
+async fn finalized_receipt_rejects_missing_failed_stale_and_different_transactions() {
+    let (before, after, transaction) = verification_fixture();
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = journal.ingest(before, &catalog()).await.unwrap();
+    let signed = STANDARD.encode(bincode::serialize(&transaction).unwrap());
+    for fault in ["missing", "meta", "failed", "stale", "bytes"] {
+        let mut response = receipt(&transaction);
+        match fault {
+            "missing" => response = Value::Null,
+            "meta" => response["meta"] = Value::Null,
+            "failed" => {
+                response["meta"]["err"] = json!("AccountNotFound");
+                response["meta"]["status"] = json!({"Err": "AccountNotFound"});
+            }
+            "stale" => response["slot"] = json!(SLOT),
+            "bytes" => {
+                let mut different = transaction.clone();
+                different.message.instructions[0].data[0] = 9;
+                response = receipt(&different);
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            rpc::verify_revoke(
+                &verification_client(response, &after),
+                &journal,
+                &record.id,
+                source(),
+                &signed
+            )
+            .await
+            .is_err(),
+            "{fault}"
+        );
+        assert_eq!(
+            journal
+                .latest(&record.snapshot.scope_id().unwrap())
+                .await
+                .unwrap(),
+            Some(record.clone())
+        );
+    }
+}
+
+#[tokio::test]
+async fn finalized_verification_rejects_forged_or_unreviewed_actions_before_rpc() {
+    let (before, _, transaction) = verification_fixture();
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = journal.ingest(before, &catalog()).await.unwrap();
+    let signer = Keypair::new_from_array([7; 32]);
+    for fault in ["signature", "instruction", "extra", "fee-payer"] {
+        let mut different = transaction.clone();
+        match fault {
+            "signature" => different.signatures[0] = Default::default(),
+            "instruction" => different.message.instructions[0].data[0] = 9,
+            "extra" => different
+                .message
+                .instructions
+                .push(different.message.instructions[0].clone()),
+            "fee-payer" => different.message.account_keys[0] = Pubkey::new_unique(),
+            _ => unreachable!(),
+        }
+        if matches!(fault, "instruction" | "extra") {
+            different.signatures[0] = signer.sign_message(&different.message_data());
+        }
+        let signed = STANDARD.encode(bincode::serialize(&different).unwrap());
+        assert!(
+            matches!(
+                rpc::verify_revoke(
+                    &client(Value::Null),
+                    &journal,
+                    &record.id,
+                    source(),
+                    &signed
+                )
+                .await,
+                Err(Error::InvalidObservation(_)) | Err(Error::Adapter(AdapterError::DiffMismatch))
+            ),
+            "{fault}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn subsequent_reapproval_and_unknown_code_do_not_become_verified_revoke() {
+    let (before, after, transaction) = verification_fixture();
+    for fault in [
+        "still-delegated",
+        "upgrade",
+        "coverage",
+        "before-transaction",
+    ] {
+        let journal = Journal::open("sqlite::memory:").await.unwrap();
+        let record = journal.ingest(before.clone(), &catalog()).await.unwrap();
+        let mut observed = after.clone();
+        match fault {
+            "still-delegated" => {
+                account(&mut observed, source()).data =
+                    account(&mut before.clone(), source()).data.clone()
+            }
+            "upgrade" => {
+                let data = account(
+                    &mut observed,
+                    get_program_data_address(&spl::DelegateAdapter.protocol().program_id),
+                );
+                *data.data.last_mut().unwrap() ^= 1;
+            }
+            "coverage" | "before-transaction" => {
+                observed.observation.slot = if fault == "coverage" { SLOT + 2 } else { SLOT };
+                observed.observation.bank = format!("rpc:finalized:{}", observed.observation.slot);
+                let slot = observed.observation.slot;
+                let clock = account(&mut observed, sysvar::clock::id());
+                let mut value: Clock = bincode::deserialize(&clock.data).unwrap();
+                value.slot = slot;
+                clock.data = bincode::serialize(&value).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let signed = STANDARD.encode(bincode::serialize(&transaction).unwrap());
+        assert!(
+            rpc::verify_revoke(
+                &verification_client(receipt(&transaction), &observed),
+                &journal,
+                &record.id,
+                source(),
+                &signed
+            )
+            .await
+            .is_err(),
+            "{fault}"
+        );
+        let current = journal
+            .latest(&record.snapshot.scope_id().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        if matches!(fault, "upgrade" | "coverage") {
+            assert_ne!(current.id, record.id);
+            assert!(matches!(
+                current.projection,
+                catalyst_indexer::Projection::Unsupported { .. }
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn finalized_verification_route_returns_bound_evidence() {
+    let (before, after, transaction) = verification_fixture();
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = journal.ingest(before, &catalog()).await.unwrap();
+    let app = rpc::action_router(journal, verification_client(receipt(&transaction), &after));
+    let request = Request::post(format!(
+        "/snapshots/{}/actions/revoke/{}/verify",
+        record.id,
+        source()
+    ))
+    .header("content-type", "application/json")
+    .body(Body::from(
+        json!({"signed_transaction": STANDARD.encode(bincode::serialize(&transaction).unwrap())})
+            .to_string(),
+    ))
+    .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["state_version"], record.id);
+    assert_eq!(body["transaction"]["slot"], SLOT + 1);
+    assert_eq!(body["observation"]["coverage_complete"], false);
+}
+
+#[tokio::test]
+async fn verification_rpc_requires_finality_and_the_execution_slot_floor() {
+    let (before, after, transaction) = verification_fixture();
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = journal.ingest(before, &catalog()).await.unwrap();
+    let expected_signature = transaction.signatures[0].to_string();
+    let signed = STANDARD.encode(bincode::serialize(&transaction).unwrap());
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let recorded = requests.clone();
+    let app = Router::new().route(
+        "/",
+        post(move |Json(request): Json<Value>| {
+            let after = after.clone();
+            let transaction = transaction.clone();
+            let recorded = recorded.clone();
+            async move {
+                recorded.lock().unwrap().push(request.clone());
+                let result = match request["method"].as_str().unwrap() {
+                    "getGenesisHash" => metadata()["cluster"].clone(),
+                    "getTransaction" => receipt(&transaction),
+                    "getMultipleAccounts" => {
+                        let values: Vec<_> = request["params"][0]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|key| {
+                                let key: Pubkey = key.as_str().unwrap().parse().unwrap();
+                                ui(&after
+                                    .accounts
+                                    .iter()
+                                    .find(|(address, _)| *address == key)
+                                    .unwrap()
+                                    .1)
+                            })
+                            .collect();
+                        json!({"context": {"slot": SLOT + 1}, "value": values})
+                    }
+                    other => panic!("unexpected RPC: {other}"),
+                };
+                Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": result}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = RpcClient::new_with_timeout_and_commitment(
+        format!("http://{}/", listener.local_addr().unwrap()),
+        Duration::from_secs(5),
+        CommitmentConfig::finalized(),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let result = rpc::verify_revoke(&client, &journal, &record.id, source(), &signed).await;
+    server.abort();
+    result.unwrap();
+    let requests = requests.lock().unwrap();
+    let methods: Vec<_> = requests
+        .iter()
+        .map(|value| value["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            "getGenesisHash",
+            "getTransaction",
+            "getGenesisHash",
+            "getMultipleAccounts"
+        ]
+    );
+    assert_eq!(requests[1]["params"][0], expected_signature);
+    assert_eq!(requests[1]["params"][1]["commitment"], "finalized");
+    assert_eq!(requests[1]["params"][1]["encoding"], "base64");
+    assert_eq!(requests[3]["params"][1]["commitment"], "finalized");
+    assert_eq!(requests[3]["params"][1]["minContextSlot"], SLOT + 1);
 }

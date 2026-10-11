@@ -136,6 +136,29 @@ and return no signing request. Journal verification failures return 500.
 Executable/runtime evidence requirements also apply to this endpoint. Current public
 captures without that evidence remain incomplete and cannot produce signing bytes.
 
+After the wallet has submitted the checked signed bytes, call
+`POST /snapshots/{id}/actions/revoke/{token_account}/verify` with JSON
+`{"signed_transaction":"BASE64_SIGNED_WIRE_TRANSACTION"}`. This endpoint never sends.
+It checks native signatures, requires the canonical owner revoke derived from the
+retained snapshot, and fetches that signature with finalized commitment. The returned
+transaction must match and have successful execution metadata at a slot after the
+original observation. Missing finalized transactions return 404; clients may retry.
+
+It then collects one finalized account batch at or after the transaction slot and
+journals it, including unsupported upgrades and incomplete projections. Only verified
+deployment/runtime evidence, the expected token data and an agreeing semantic Diff
+produce a success response. Reapproval, changed token state or missing evidence reject
+verification. A newer or ambiguous checkpoint returns 409. The response retains the
+RPC transaction receipt, original state version, new journal record and semantic changes.
+The receipt is returned to the caller; only the account observation is persisted.
+
+This establishes a successful canonical revoke and the expected later observed state
+under RPC trust. It does not establish the transaction's immediate post-state or exclude
+intervening transactions. Coverage remains partial. Browser signing/submission wiring
+and public runtime witnesses are still required for the live product loop. Tests use
+real native token account goldens, local signing keys and synthetic RPC receipts;
+they do not claim an executed public-chain wallet journey.
+
 `GET /snapshots/{id}` returns retained evidence and its projection.
 `GET /snapshots/{id}/authorizations/{address}` selects records that mention the
 address as principal, subject or resource. Compound principals remain intact;
