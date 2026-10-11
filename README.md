@@ -150,7 +150,23 @@ deployment/runtime evidence, the expected token data and an agreeing semantic Di
 produce a success response. Reapproval, changed token state or missing evidence reject
 verification. A newer or ambiguous checkpoint returns 409. The response retains the
 RPC transaction receipt, original state version, new journal record and semantic changes.
-The receipt is returned to the caller; only the account observation is persisted.
+Success also requires storing the receipt and both snapshot references. The returned
+`verification_id` is the SHA256 of that retained evidence. Repeating the same evidence
+keeps the same ID; a different later observation produces a separate historical record.
+
+`GET /verifications/revoke/{verification_id}` retrieves and replays that verification
+without RPC access. It checks the evidence digest, replays both snapshots with their
+recorded SDK/runtime provenance, rechecks native signatures and the canonical action,
+then recompiles the semantic Diff. Missing verification IDs return 404. Corrupt evidence,
+missing referenced snapshots or incompatible replay return 500, never a success claim.
+This route remains available when `RPC_URL` is unset.
+
+The account observation commits before the verification record. A failed verification
+write returns an error while retaining the new account state; retrying is idempotent.
+Historical verification remains readable after later reapproval and does not establish
+current authority. Use the scope API for the latest observed state. The evidence digest
+detects changes to a retained record; it does not authenticate the RPC provider or protect
+against a database owner rewriting the entire evidence chain.
 
 This establishes a successful canonical revoke and the expected later observed state
 under RPC trust. It does not establish the transaction's immediate post-state or exclude

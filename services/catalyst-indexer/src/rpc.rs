@@ -407,10 +407,210 @@ pub async fn simulate_revoke(
 
 #[derive(Serialize)]
 pub struct VerifiedRevoke {
+    pub verification_id: String,
     pub state_version: String,
     pub transaction: EncodedConfirmedTransactionWithStatusMeta,
     pub observation: Record,
     pub changes: Vec<AuthorizationChange>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevokeEvidence {
+    state_version: String,
+    observation_id: String,
+    transaction: EncodedConfirmedTransactionWithStatusMeta,
+}
+
+impl Journal {
+    pub async fn replay_revoke(&self, id: &str) -> Result<VerifiedRevoke, Error> {
+        let raw: String =
+            sqlx::query_scalar("SELECT evidence FROM revoke_verifications WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.database)
+                .await?
+                .ok_or(Error::NotFound)?;
+        if format!("{:x}", Sha256::digest(raw.as_bytes())) != id {
+            return Err(Error::ReplayMismatch);
+        }
+        let evidence: RevokeEvidence = serde_json::from_str(&raw)?;
+        let record = self
+            .replay(&evidence.state_version)
+            .await
+            .map_err(|error| match error {
+                Error::NotFound => Error::ReplayMismatch,
+                error => error,
+            })?;
+        let observation =
+            self.replay(&evidence.observation_id)
+                .await
+                .map_err(|error| match error {
+                    Error::NotFound => Error::ReplayMismatch,
+                    error => error,
+                })?;
+        let [Target::SplDelegate { source }] = record.snapshot.targets.as_slice() else {
+            return Err(Error::ReplayMismatch);
+        };
+        let signed = evidence
+            .transaction
+            .transaction
+            .transaction
+            .decode()
+            .and_then(|transaction| transaction.into_legacy_transaction())
+            .ok_or(Error::ReplayMismatch)?;
+        let action =
+            checked_revoke(&record, *source, &signed).map_err(|_| Error::ReplayMismatch)?;
+        check_receipt(
+            &evidence.transaction,
+            &signed,
+            record.snapshot.observation.slot,
+        )
+        .map_err(|_| Error::ReplayMismatch)?;
+        let changes = revoke_changes(&record, &observation, &action, evidence.transaction.slot)
+            .map_err(|_| Error::ReplayMismatch)?;
+        Ok(VerifiedRevoke {
+            verification_id: id.into(),
+            state_version: record.id,
+            transaction: evidence.transaction,
+            observation,
+            changes,
+        })
+    }
+}
+
+pub(crate) async fn retained_revoke(
+    State(journal): State<Journal>,
+    Path(id): Path<String>,
+) -> Result<Json<VerifiedRevoke>, (StatusCode, Json<serde_json::Value>)> {
+    journal.replay_revoke(&id).await.map(Json).map_err(|error| {
+        if matches!(error, Error::NotFound) {
+            action_error(error)
+        } else {
+            action_error(Error::ReplayMismatch)
+        }
+    })
+}
+
+fn checked_revoke(
+    record: &Record,
+    source: Pubkey,
+    signed: &Transaction,
+) -> Result<sdk::Action, Error> {
+    let snapshot = &record.snapshot;
+    if snapshot.observation.origin != Origin::Finalized {
+        return Err(Error::InvalidObservation("finalized evidence required"));
+    }
+    if snapshot.targets != [Target::SplDelegate { source }] {
+        return Err(AdapterError::UnsupportedOperation.into());
+    }
+    signed
+        .verify()
+        .map_err(|_| Error::InvalidObservation("invalid transaction signature"))?;
+    let catalog = Catalog::new(record.versions.clone()).map_err(|_| Error::ReplayMismatch)?;
+    let adapter = spl::DelegateAdapter;
+    let context = crate::context(
+        adapter.protocol().program_id,
+        snapshot,
+        &catalog,
+        &record.id,
+        &mut Vec::new(),
+    )?;
+    let before = crate::spl_state(snapshot, source)?;
+    let authorization = sdk::compile_state(&adapter, &before, &context)?
+        .into_iter()
+        .next()
+        .ok_or(Error::NotFound)?;
+    let action = sdk::actions(&adapter, &authorization, &before, &context)?.remove(0);
+    let native = TokenAccount::unpack(&before.account.data)
+        .map_err(|error| AdapterError::InvalidState(error.to_string()))?;
+    let mut expected = Transaction::new_with_payer(&action.instructions, Some(&native.owner));
+    expected.message.recent_blockhash = signed.message.recent_blockhash;
+    if signed.message != expected.message {
+        return Err(AdapterError::DiffMismatch.into());
+    }
+    Ok(action)
+}
+
+fn check_receipt(
+    transaction: &EncodedConfirmedTransactionWithStatusMeta,
+    signed: &Transaction,
+    before_slot: u64,
+) -> Result<(), Error> {
+    let executed = transaction
+        .transaction
+        .transaction
+        .decode()
+        .and_then(|transaction| transaction.into_legacy_transaction())
+        .ok_or(Error::InvalidObservation("invalid finalized transaction"))?;
+    if executed != *signed || transaction.slot <= before_slot {
+        return Err(Error::InvalidObservation("finalized transaction mismatch"));
+    }
+    let meta = transaction
+        .transaction
+        .meta
+        .as_ref()
+        .ok_or(Error::InvalidObservation(
+            "missing transaction execution metadata",
+        ))?;
+    if meta.err.is_some() || meta.status.is_err() {
+        return Err(Error::InvalidObservation("finalized transaction failed"));
+    }
+    Ok(())
+}
+
+fn revoke_changes(
+    record: &Record,
+    observation: &Record,
+    action: &sdk::Action,
+    transaction_slot: u64,
+) -> Result<Vec<AuthorizationChange>, Error> {
+    let snapshot = &record.snapshot;
+    let after = &observation.snapshot;
+    if after.observation.origin != Origin::Finalized
+        || after.scope_id()? != snapshot.scope_id()?
+        || after.observation.slot < transaction_slot
+    {
+        return Err(Error::InvalidObservation("revoke observation mismatch"));
+    }
+    let [Target::SplDelegate { source }] = snapshot.targets.as_slice() else {
+        return Err(AdapterError::UnsupportedOperation.into());
+    };
+    let catalog = Catalog::new(record.versions.clone()).map_err(|_| Error::ReplayMismatch)?;
+    let adapter = spl::DelegateAdapter;
+    let context = crate::context(
+        adapter.protocol().program_id,
+        snapshot,
+        &catalog,
+        &record.id,
+        &mut Vec::new(),
+    )?;
+    let after_context = crate::context(
+        adapter.protocol().program_id,
+        after,
+        &catalog,
+        &observation.id,
+        &mut Vec::new(),
+    )?;
+    let before = crate::spl_state(snapshot, *source)?;
+    let after_state = crate::spl_state(after, *source)?;
+    let mut expected = TokenAccount::unpack(&before.account.data)
+        .map_err(|error| AdapterError::InvalidState(error.to_string()))?;
+    expected.delegate = None.into();
+    expected.delegated_amount = 0;
+    let mut expected_data = before.account.data.clone();
+    TokenAccount::pack(expected, &mut expected_data)
+        .map_err(|error| AdapterError::InvalidState(error.to_string()))?;
+    if after_state.account.data != expected_data {
+        return Err(AdapterError::DiffMismatch.into());
+    }
+    Ok(sdk::verify_transaction_diff(
+        &adapter,
+        &action.instructions,
+        &before,
+        &context,
+        &after_state,
+        &after_context,
+    )?)
 }
 
 /// Verify a finalized canonical revoke and a later scoped observation.
@@ -445,31 +645,8 @@ pub async fn verify_revoke(
     if supplied != canonical {
         return Err(Error::InvalidObservation("noncanonical signed transaction"));
     }
-    signed
-        .verify()
-        .map_err(|_| Error::InvalidObservation("invalid transaction signature"))?;
+    let action = checked_revoke(&record, source, &signed)?;
     let catalog = Catalog::new(record.versions.clone()).map_err(|_| Error::ReplayMismatch)?;
-    let adapter = spl::DelegateAdapter;
-    let context = crate::context(
-        adapter.protocol().program_id,
-        snapshot,
-        &catalog,
-        id,
-        &mut Vec::new(),
-    )?;
-    let before = crate::spl_state(snapshot, source)?;
-    let authorization = sdk::compile_state(&adapter, &before, &context)?
-        .into_iter()
-        .next()
-        .ok_or(Error::NotFound)?;
-    let action = sdk::actions(&adapter, &authorization, &before, &context)?.remove(0);
-    let native = TokenAccount::unpack(&before.account.data)
-        .map_err(|error| AdapterError::InvalidState(error.to_string()))?;
-    let mut expected = Transaction::new_with_payer(&action.instructions, Some(&native.owner));
-    expected.message.recent_blockhash = signed.message.recent_blockhash;
-    if signed.message != expected.message {
-        return Err(AdapterError::DiffMismatch.into());
-    }
     if client.get_genesis_hash().await?.to_string() != snapshot.observation.cluster {
         return Err(Error::InvalidObservation("cluster genesis mismatch"));
     }
@@ -487,25 +664,7 @@ pub async fn verify_revoke(
         )
         .await?;
     let transaction = transaction.ok_or(Error::NotFound)?;
-    let executed = transaction
-        .transaction
-        .transaction
-        .decode()
-        .and_then(|transaction| transaction.into_legacy_transaction())
-        .ok_or(Error::InvalidObservation("invalid finalized transaction"))?;
-    if executed != signed || transaction.slot <= snapshot.observation.slot {
-        return Err(Error::InvalidObservation("finalized transaction mismatch"));
-    }
-    let meta = transaction
-        .transaction
-        .meta
-        .as_ref()
-        .ok_or(Error::InvalidObservation(
-            "missing transaction execution metadata",
-        ))?;
-    if meta.err.is_some() || meta.status.is_err() {
-        return Err(Error::InvalidObservation("finalized transaction failed"));
-    }
+    check_receipt(&transaction, &signed, snapshot.observation.slot)?;
     let after = observe(
         client,
         Scope {
@@ -518,31 +677,7 @@ pub async fn verify_revoke(
     .await?;
     // Retain upgrades and incomplete evidence too, so stale grants stop being current.
     let observation = journal.ingest(after, &catalog).await?;
-    let after_context = crate::context(
-        adapter.protocol().program_id,
-        &observation.snapshot,
-        &catalog,
-        &observation.id,
-        &mut Vec::new(),
-    )?;
-    let after_state = crate::spl_state(&observation.snapshot, source)?;
-    let mut expected = native;
-    expected.delegate = None.into();
-    expected.delegated_amount = 0;
-    let mut expected_data = before.account.data.clone();
-    TokenAccount::pack(expected, &mut expected_data)
-        .map_err(|error| AdapterError::InvalidState(error.to_string()))?;
-    if after_state.account.data != expected_data {
-        return Err(AdapterError::DiffMismatch.into());
-    }
-    let changes = sdk::verify_transaction_diff(
-        &adapter,
-        &action.instructions,
-        &before,
-        &context,
-        &after_state,
-        &after_context,
-    )?;
+    let changes = revoke_changes(&record, &observation, &action, transaction.slot)?;
     if journal
         .latest(&snapshot.scope_id()?)
         .await?
@@ -550,9 +685,32 @@ pub async fn verify_revoke(
     {
         return Err(Error::Conflict);
     }
-    Ok(VerifiedRevoke {
+    let evidence = RevokeEvidence {
         state_version: record.id,
+        observation_id: observation.id.clone(),
         transaction,
+    };
+    let raw = serde_json::to_string(&evidence)?;
+    let verification_id = format!("{:x}", Sha256::digest(raw.as_bytes()));
+    sqlx::query(
+        "INSERT INTO revoke_verifications (id, evidence) VALUES (?, ?) ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(&verification_id)
+    .bind(&raw)
+    .execute(&journal.database)
+    .await?;
+    let retained: String =
+        sqlx::query_scalar("SELECT evidence FROM revoke_verifications WHERE id = ?")
+            .bind(&verification_id)
+            .fetch_one(&journal.database)
+            .await?;
+    if retained != raw {
+        return Err(Error::ReplayMismatch);
+    }
+    Ok(VerifiedRevoke {
+        verification_id,
+        state_version: evidence.state_version,
+        transaction: evidence.transaction,
         observation,
         changes,
     })

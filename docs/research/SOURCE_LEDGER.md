@@ -139,6 +139,21 @@
   positions; an index over immutable rows avoids a separate mutable head table.
 - Reuse: DEPEND / PUBLIC API. No source copied.
 
+## Retained revoke verification
+
+- Reuse: existing SQLx 0.7.4 migration/query APIs and SQLite, DEPEND / PUBLIC API.
+  No added dependencies or copied implementation. The existing snapshot journal's
+  immutable records and replay checks provide the account evidence boundary.
+- [SQLite WAL documentation](https://www.sqlite.org/wal.html), sections 2 and 2.3,
+  documents commit records and FULL synchronization. Inspection: DOCUMENTATION;
+  reopen, rejected-write and duplicate-evidence cases executed locally. Existing
+  WAL/FULL settings remain unchanged. These tests do not emulate power loss.
+- The receipt references already committed snapshots. Its insert must succeed before
+  the API reports successful verification. A rejected insert preserves the new account
+  observation, so a storage failure cannot restore a superseded grant.
+- Retrieval reuses the same native signature, canonical-action and semantic checks as
+  live verification. A digest is local integrity evidence, not an RPC finality attestation.
+
 ## Subscriptions deployment provenance
 
 - Source: https://github.com/solana-foundation/subscriptions,

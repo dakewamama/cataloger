@@ -779,6 +779,7 @@ async fn current_graph(
 
 pub fn router(journal: Journal) -> Router {
     Router::new()
+        .route("/verifications/revoke/:id", get(rpc::retained_revoke))
         .route("/snapshots/:id", get(snapshot))
         .route(
             "/snapshots/:id/authorizations/:address",

@@ -1116,6 +1116,17 @@ async fn finalized_revoke_is_reobserved_and_replayable_without_submitting() {
     .await
     .unwrap();
     assert_eq!(repeated.observation, result.observation);
+    assert_eq!(repeated.verification_id, result.verification_id);
+    assert_eq!(
+        serde_json::to_value(
+            journal
+                .replay_revoke(&result.verification_id)
+                .await
+                .unwrap()
+        )
+        .unwrap(),
+        serde_json::to_value(&result).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -1363,4 +1374,271 @@ async fn verification_rpc_requires_finality_and_the_execution_slot_floor() {
     assert_eq!(requests[1]["params"][1]["encoding"], "base64");
     assert_eq!(requests[3]["params"][1]["commitment"], "finalized");
     assert_eq!(requests[3]["params"][1]["minContextSlot"], SLOT + 1);
+}
+
+struct VerificationDatabase(std::path::PathBuf);
+
+impl VerificationDatabase {
+    fn new() -> Self {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "catalyst-verification-{}-{nonce}.sqlite",
+            std::process::id()
+        ));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        Self(path)
+    }
+
+    fn url(&self) -> String {
+        format!("sqlite://{}", self.0.display())
+    }
+}
+
+impl Drop for VerificationDatabase {
+    fn drop(&mut self) {
+        for suffix in ["", "-wal", "-shm"] {
+            if let Err(error) = std::fs::remove_file(format!("{}{suffix}", self.0.display())) {
+                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn retained_verification_survives_restart_and_later_reapproval_without_rpc() {
+    let database = VerificationDatabase::new();
+    let journal = Journal::open(&database.url()).await.unwrap();
+    let (before, after, transaction) = verification_fixture();
+    let record = journal.ingest(before, &catalog()).await.unwrap();
+    let signed = STANDARD.encode(bincode::serialize(&transaction).unwrap());
+    let verified = rpc::verify_revoke(
+        &verification_client(receipt(&transaction), &after),
+        &journal,
+        &record.id,
+        source(),
+        &signed,
+    )
+    .await
+    .unwrap();
+    let expected = serde_json::to_value(&verified).unwrap();
+    drop(journal);
+    let journal = Journal::open(&database.url()).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(
+            journal
+                .replay_revoke(&verified.verification_id)
+                .await
+                .unwrap()
+        )
+        .unwrap(),
+        expected
+    );
+
+    let mut reapproved = record.snapshot.clone();
+    reapproved.observation.slot = SLOT + 2;
+    reapproved.observation.bank = format!("rpc:finalized:{}", SLOT + 2);
+    let clock = account(&mut reapproved, sysvar::clock::id());
+    let mut native: Clock = bincode::deserialize(&clock.data).unwrap();
+    native.slot = SLOT + 2;
+    clock.data = bincode::serialize(&native).unwrap();
+    let current = journal.ingest(reapproved, &catalog()).await.unwrap();
+    assert_eq!(
+        journal
+            .latest(&current.snapshot.scope_id().unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        current.id
+    );
+    let app = catalyst_indexer::router(journal);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/verifications/revoke/{}",
+                verified.verification_id
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body, expected);
+    assert_ne!(body["observation"]["id"], current.id);
+    let response = app
+        .oneshot(
+            Request::get("/verifications/revoke/absent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn verification_storage_failure_cannot_report_success_and_retry_is_idempotent() {
+    let database = VerificationDatabase::new();
+    let journal = Journal::open(&database.url()).await.unwrap();
+    let pool = sqlx::SqlitePool::connect(&database.url()).await.unwrap();
+    let (before, after, transaction) = verification_fixture();
+    let record = journal.ingest(before, &catalog()).await.unwrap();
+    let signed = STANDARD.encode(bincode::serialize(&transaction).unwrap());
+    sqlx::query("CREATE TRIGGER reject_verification BEFORE INSERT ON revoke_verifications BEGIN SELECT RAISE(ABORT, 'storage failure'); END")
+        .execute(&pool).await.unwrap();
+    assert!(matches!(
+        rpc::verify_revoke(
+            &verification_client(receipt(&transaction), &after),
+            &journal,
+            &record.id,
+            source(),
+            &signed,
+        )
+        .await,
+        Err(Error::Database(_))
+    ));
+    let observed = journal
+        .latest(&record.snapshot.scope_id().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(observed.snapshot.observation.slot, SLOT + 1);
+    assert!(
+        matches!(&observed.projection, catalyst_indexer::Projection::Compiled { authorizations } if authorizations.is_empty())
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM revoke_verifications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    sqlx::query("DROP TRIGGER reject_verification")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let verified = rpc::verify_revoke(
+            &verification_client(receipt(&transaction), &after),
+            &journal,
+            &record.id,
+            source(),
+            &signed,
+        )
+        .await
+        .unwrap();
+        ids.push(verified.verification_id);
+    }
+    assert_eq!(ids[0], ids[1]);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM revoke_verifications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn retained_evidence_checks_hash_and_replays_native_claims_even_if_rehashed() {
+    let database = VerificationDatabase::new();
+    let journal = Journal::open(&database.url()).await.unwrap();
+    let pool = sqlx::SqlitePool::connect(&database.url()).await.unwrap();
+    let (before, after, transaction) = verification_fixture();
+    let record = journal.ingest(before, &catalog()).await.unwrap();
+    let signed = STANDARD.encode(bincode::serialize(&transaction).unwrap());
+    let verified = rpc::verify_revoke(
+        &verification_client(receipt(&transaction), &after),
+        &journal,
+        &record.id,
+        source(),
+        &signed,
+    )
+    .await
+    .unwrap();
+    let raw: String = sqlx::query_scalar("SELECT evidence FROM revoke_verifications WHERE id = ?")
+        .bind(&verified.verification_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    for fault in [
+        "checksum",
+        "failed",
+        "stale",
+        "future",
+        "signature",
+        "action",
+        "before",
+        "after",
+        "missing",
+    ] {
+        let mut evidence: Value = serde_json::from_str(&raw).unwrap();
+        match fault {
+            "checksum" => evidence["transaction"]["blockTime"] = json!(0),
+            "failed" => evidence["transaction"]["meta"]["err"] = json!("AccountNotFound"),
+            "stale" => evidence["transaction"]["slot"] = json!(SLOT),
+            "future" => evidence["transaction"]["slot"] = json!(SLOT + 2),
+            "signature" | "action" => {
+                let mut changed = transaction.clone();
+                if fault == "signature" {
+                    changed.signatures[0] = Default::default();
+                } else {
+                    changed.message.instructions[0].data[0] = 9;
+                    changed.sign(
+                        &[&Keypair::new_from_array([7; 32])],
+                        changed.message.recent_blockhash,
+                    );
+                }
+                evidence["transaction"] = receipt(&changed);
+            }
+            "before" => evidence["state_version"] = json!(verified.observation.id),
+            "after" => evidence["observation_id"] = json!(record.id),
+            "missing" => evidence["observation_id"] = json!("absent"),
+            _ => unreachable!(),
+        }
+        let changed = serde_json::to_string(&evidence).unwrap();
+        let id = if fault == "checksum" {
+            verified.verification_id.clone()
+        } else {
+            format!("{:x}", Sha256::digest(changed.as_bytes()))
+        };
+        sqlx::query("INSERT INTO revoke_verifications (id, evidence) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET evidence = excluded.evidence")
+            .bind(&id).bind(&changed).execute(&pool).await.unwrap();
+        assert!(journal.replay_revoke(&id).await.is_err(), "{fault}");
+        let response = catalyst_indexer::router(journal.clone())
+            .oneshot(
+                Request::get(format!("/verifications/revoke/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{fault}"
+        );
+    }
+    sqlx::query("UPDATE revoke_verifications SET evidence = ? WHERE id = ?")
+        .bind(&raw)
+        .bind(&verified.verification_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        journal
+            .replay_revoke(&verified.verification_id)
+            .await
+            .is_ok()
+    );
+    pool.close().await;
 }
