@@ -405,6 +405,47 @@ pub async fn simulate_revoke(
     })
 }
 
+pub const CURRENT_BANK_ATTEMPTS: usize = 8;
+
+/// Observe the scope's finalized bank, then simulate one revoke in that same bank.
+/// Finalized slots advance between requests, so a retained record cannot be simulated later.
+pub async fn simulate_current_revoke(
+    client: &RpcClient,
+    journal: &Journal,
+    scope_id: &str,
+    source: Pubkey,
+) -> Result<SimulatedRevoke, Error> {
+    for _ in 0..CURRENT_BANK_ATTEMPTS {
+        let record = journal.latest(scope_id).await?.ok_or(Error::NotFound)?;
+        let snapshot = record.snapshot;
+        if snapshot.observation.origin != Origin::Finalized {
+            return Err(Error::InvalidObservation("finalized evidence required"));
+        }
+        if snapshot.targets != [Target::SplDelegate { source }] {
+            return Err(AdapterError::UnsupportedOperation.into());
+        }
+        let catalog = Catalog::new(record.versions).map_err(|_| Error::ReplayMismatch)?;
+        let current = observe(
+            client,
+            Scope {
+                cluster: snapshot.observation.cluster,
+                accounts: snapshot.accounts.iter().map(|(key, _)| *key).collect(),
+                targets: snapshot.targets,
+                min_context_slot: Some(snapshot.observation.slot),
+            },
+        )
+        .await?;
+        let id = journal.ingest(current, &catalog).await?.id;
+        match simulate_revoke(client, journal, &id, source).await {
+            Err(Error::InvalidObservation("simulation/context slot mismatch")) => continue,
+            result => return result,
+        }
+    }
+    Err(Error::InvalidObservation(
+        "simulation/context slot mismatch",
+    ))
+}
+
 #[derive(Serialize)]
 pub struct VerifiedRevoke {
     pub verification_id: String,
@@ -720,7 +761,27 @@ pub fn action_router(journal: Journal, client: RpcClient) -> Router {
     Router::new()
         .route("/snapshots/:id/actions/revoke/:source", post(revoke))
         .route("/snapshots/:id/actions/revoke/:source/verify", post(verify))
+        .route(
+            "/scopes/:scope_id/actions/revoke/:source",
+            post(current_revoke),
+        )
         .with_state((journal, Arc::new(client)))
+}
+
+async fn current_revoke(
+    State((journal, client)): State<(Journal, Arc<RpcClient>)>,
+    Path((scope_id, source)): Path<(String, String)>,
+) -> Result<Json<SimulatedRevoke>, (StatusCode, Json<serde_json::Value>)> {
+    let source = source.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid token account address"})),
+        )
+    })?;
+    simulate_current_revoke(&client, &journal, &scope_id, source)
+        .await
+        .map(Json)
+        .map_err(action_error)
 }
 
 #[derive(Deserialize)]

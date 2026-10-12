@@ -136,6 +136,16 @@ and return no signing request. Journal verification failures return 500.
 Executable/runtime evidence requirements also apply to this endpoint. Current public
 captures without that evidence remain incomplete and cannot produce signing bytes.
 
+A retained record stops being simulable once the finalized slot advances, normally
+within one slot time. `POST /scopes/{scope_id}/actions/revoke/{token_account}` takes
+the scope's newest record, collects the same accounts in one finalized batch at or
+after its slot, journals that observation and simulates against it. It repeats up to
+eight times while the simulation lands in a different bank, then returns 409. Every
+check above applies to the fresh record; nothing is relaxed to make the banks agree.
+`state_version` names the newly journaled record, which clients must read and review
+before signing. Unknown scopes return 404. Against a public RPC pool most attempts
+miss the bank, so a low-latency provider matters more than the retry count.
+
 After the wallet has submitted the checked signed bytes, call
 `POST /snapshots/{id}/actions/revoke/{token_account}/verify` with JSON
 `{"signed_transaction":"BASE64_SIGNED_WIRE_TRANSACTION"}`. This endpoint never sends.
