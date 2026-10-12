@@ -450,7 +450,7 @@ pub async fn simulate_current_revoke(
             return Err(AdapterError::UnsupportedOperation.into());
         }
         let catalog = Catalog::new(record.versions).map_err(|_| Error::ReplayMismatch)?;
-        let current = observe(
+        let current = match observe(
             client,
             Scope {
                 cluster: snapshot.observation.cluster,
@@ -459,7 +459,12 @@ pub async fn simulate_current_revoke(
                 min_context_slot: Some(snapshot.observation.slot),
             },
         )
-        .await?;
+        .await
+        {
+            // A node can answer with a Clock from the bank next to the one it names; read again.
+            Err(Error::InvalidObservation("invalid bank clock")) => continue,
+            current => current?,
+        };
         let id = journal.ingest(current, &catalog).await?.id;
         match simulate_revoke(client, journal, &id, source).await {
             Err(Error::InvalidObservation("simulation/context slot mismatch")) => continue,
