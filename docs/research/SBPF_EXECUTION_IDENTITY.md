@@ -27,3 +27,13 @@ The finalized capture has no authenticated validator build, active feature set o
 The effective fingerprint is a deterministic fingerprint of Agave's loaded SBPF image under the named local profile. It is not JIT machine code, a cryptographic validator attestation, or proof that every validator ran that exact configuration. Runtime evidence is an operator trust input and must be independently sourced. Unknown flags, unsupported versions, malformed ELF, invalid relocations, changed ProgramData or missing runtime/source evidence fail closed.
 
 This milestone does not assert exact live execution identity for Subscriptions and does not establish that all validators shared one runtime environment. No ARM semantics changed.
+
+## Controlled local validator
+
+The demo validator was launched from Agave 3.1.10 at revision
+`7bc9c805218ca06769956e2cb61601329f5a0f6c`, without feature or compute-budget overrides.
+The pinned CLI reported 250 active features from genesis and only Alpenglow inactive.
+At that revision Alpenglow is the test-validator default exclusion and does not map
+into `SVMFeatureSet`. The default bank budget maps to the same SVM budget as our
+inspection profile. This is operator evidence for the controlled local process;
+it does not establish the runtime environment of the retained public captures.

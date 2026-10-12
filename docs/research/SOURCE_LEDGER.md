@@ -188,3 +188,22 @@
 - Static syscalls: [SIMD-0178](https://github.com/solana-foundation/solana-improvement-documents/blob/64dff76/proposals/0178-static-syscalls.md) requires static syscall encoding for SBPF v3 and removes dynamic call relocations. SIMD-0189 specifies stricter v3 ELF parsing. The captured Subscriptions ELF flags are zero, so these v3 rules do not apply. Reuse: SPEC for version distinction, official Agave loader for implementation. No source copied.
 - Reproducible build: the official Subscriptions Actions run `37008589067` used `solana-verify` 0.5.2, Agave 3.1.10 and platform-tools v1.52. The full padded ProgramData payload is 133280 bytes with SHA256 `2675ad1d2b5068d47fc5d169156cf4859a9c21c0406ce63e3828e3b7320fddbf`. `solana-verify` normalization (trim trailing zeroes) hashes to `e705f5a309f84f849b402f20de4bea5f2cc1d1d4f691ba7caabcb07c8b46af51`, matching the official run and locked local rebuild.
 - Trust boundary: the local loader image is deterministic for its pinned crate and explicit profile. The finalized RPC capture does not attest Agave's active feature set or exact deployment environment. The adapter therefore treats missing runtime evidence as insufficient for live semantic support. The reported image fingerprint is not a JIT machine-code hash and makes no claim about validator execution without a matching runtime witness. No code copied.
+
+## Local validator loader witness and revoke fees
+
+- Agave revision `7bc9c805218ca06769956e2cb61601329f5a0f6c`, Apache-2.0:
+  `test-validator/src/lib.rs`, `feature-set/src/lib.rs`, `runtime/src/bank.rs`,
+  `compute-budget/src/compute_budget.rs`, `syscalls/src/lib.rs`.
+  TARGETED SOURCE at https://github.com/anza-xyz/agave/tree/7bc9c805218ca06769956e2cb61601329f5a0f6c.
+  The test validator disables Alpenglow by default. That feature is absent from
+  `runtime_features()`. Default compute-budget conversion retains the SVM budget
+  used by our environment factory; no override was passed to the controlled process.
+- The controlled local validator's pinned CLI reported 251 known features, 250 active
+  since genesis and only Alpenglow inactive. This supports the local loader profile;
+  it is not a public-network validator attestation. Public captures remain incomplete.
+- `solana-compute-budget-interface` 3.0.0, Apache-2.0, `src/lib.rs` builders and tests:
+  TARGETED SOURCE, DEPEND. Native builders encode the limit and price. Kit 8.4.0
+  independently compiles the signing golden. No implementation source copied.
+- New simulations include the fixed budget. Verification accepts the original
+  single-revoke message or the exact new budget-plus-revoke message, retaining
+  historical receipt replay without accepting arbitrary instructions or fee edits.

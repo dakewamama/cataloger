@@ -7,6 +7,10 @@ It uses the source and owner from `spl-snapshot.json` and the replacement blockh
 from the retained Agave response in `spl-revoke-rpc.json`. The action API test requires
 byte-for-byte equality with this Kit transaction, including its empty signature slot.
 The fixture proves codec compatibility, not wallet ownership or live execution.
+The current message prepends a 10,000-unit compute limit and a price of 1,000,000
+micro-lamports per unit: a fixed 10,000-lamport priority fee, plus the base fee.
+The older native simulation capture below remains unchanged; its response is reused
+as a controlled test input, not evidence that the fee-bearing message ran at that slot.
 
 To reproduce without adding Node dependencies to this Rust workspace:
 

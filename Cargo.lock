@@ -793,6 +793,7 @@ dependencies = [
  "solana-account-decoder-client-types",
  "solana-clock 4.0.0",
  "solana-commitment-config",
+ "solana-compute-budget-interface",
  "solana-keypair",
  "solana-loader-v3-interface 7.0.0",
  "solana-program-pack",
@@ -3607,6 +3608,16 @@ checksum = "1517aa49dcfa9cb793ef90e7aac81346d62ca4a546bb1a754030a033e3972e1c"
 dependencies = [
  "serde",
  "serde_derive",
+]
+
+[[package]]
+name = "solana-compute-budget-interface"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8292c436b269ad23cecc8b24f7da3ab07ca111661e25e00ce0e1d22771951ab9"
+dependencies = [
+ "solana-instruction",
+ "solana-sdk-ids",
 ]
 
 [[package]]

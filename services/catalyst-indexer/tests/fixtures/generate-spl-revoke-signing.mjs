@@ -20,7 +20,17 @@ message = setTransactionMessageLifetimeUsingBlockhash({
     blockhash: lifetime.blockhash,
     lastValidBlockHeight: BigInt(lifetime.lastValidBlockHeight),
 }, message);
-message = appendTransactionMessageInstructions([{
+const limit = new Uint8Array(5);
+limit[0] = 2;
+new DataView(limit.buffer).setUint32(1, 10_000, true);
+const price = new Uint8Array(9);
+price[0] = 3;
+new DataView(price.buffer).setBigUint64(1, 1_000_000n, true);
+const budget = address('ComputeBudget111111111111111111111111111111');
+message = appendTransactionMessageInstructions([
+{ programAddress: budget, accounts: [], data: limit },
+{ programAddress: budget, accounts: [], data: price },
+{
     programAddress: address('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
     accounts: [
         { address: source, role: AccountRole.WRITABLE },

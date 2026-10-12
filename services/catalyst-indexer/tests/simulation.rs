@@ -181,18 +181,72 @@ async fn record(journal: &Journal) -> Record {
     journal.ingest(snapshot(), &catalog()).await.unwrap()
 }
 
-async fn action_request(app: Router, id: &str, source: &str) -> (StatusCode, Value) {
+async fn post_empty(app: Router, path: String) -> (StatusCode, Value) {
     let response = app
-        .oneshot(
-            Request::post(format!("/snapshots/{id}/actions/revoke/{source}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::post(path).body(Body::empty()).unwrap())
         .await
         .unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+async fn action_request(app: Router, id: &str, source: &str) -> (StatusCode, Value) {
+    post_empty(app, format!("/snapshots/{id}/actions/revoke/{source}")).await
+}
+
+fn next_bank(snapshot: &Snapshot) -> Snapshot {
+    let mut next = snapshot.clone();
+    next.observation.slot += 1;
+    next.observation.bank = format!("rpc:finalized:{}", next.observation.slot);
+    let account = account(&mut next, sysvar::clock::id());
+    let mut clock: Clock = bincode::deserialize(&account.data).unwrap();
+    clock.slot += 1;
+    account.data = bincode::serialize(&clock).unwrap();
+    next
+}
+
+fn observed(snapshot: &Snapshot) -> Value {
+    let scope = rpc::Scope {
+        cluster: snapshot.observation.cluster.clone(),
+        accounts: snapshot.accounts.iter().map(|(key, _)| *key).collect(),
+        targets: snapshot.targets.clone(),
+        min_context_slot: None,
+    };
+    let values: Vec<_> = scope
+        .accounts()
+        .unwrap()
+        .iter()
+        .map(|key| {
+            snapshot
+                .accounts
+                .iter()
+                .find(|(address, _)| address == key)
+                .map(|(_, account)| ui(account))
+                .unwrap_or(Value::Null)
+        })
+        .collect();
+    json!({"context": {"slot": snapshot.observation.slot}, "value": values})
+}
+
+fn current_client(observations: Vec<Value>, simulations: Vec<Value>) -> RpcClient {
+    use solana_rpc_client::mock_sender::MocksMap;
+    let genesis = vec![metadata()["cluster"].clone(); observations.len() + simulations.len()];
+    let mocks = MocksMap(
+        [
+            (RpcRequest::GetGenesisHash, genesis.into()),
+            (RpcRequest::GetMultipleAccounts, observations.into()),
+            (RpcRequest::SimulateTransaction, simulations.into()),
+        ]
+        .into(),
+    );
+    RpcClient::new_sender(
+        MockSender::new_with_mocks_map("succeeds", mocks),
+        RpcClientConfig {
+            commitment_config: CommitmentConfig::finalized(),
+            ..RpcClientConfig::default()
+        },
+    )
 }
 
 #[tokio::test]
@@ -396,8 +450,8 @@ async fn native_revoke_golden_agrees_without_advancing_the_finalized_journal() {
             .iter()
             .all(|signature| *signature == Default::default())
     );
-    assert_eq!(result.transaction.message.instructions.len(), 1);
-    assert_eq!(result.transaction.message.instructions[0].data, [5]);
+    assert_eq!(result.transaction.message.instructions.len(), 3);
+    assert_eq!(result.transaction.message.instructions[2].data, [5]);
     assert_eq!(result.response.context.slot, SLOT);
     assert_eq!(
         serde_json::to_value(&result.response).unwrap()["value"]["accounts"],
@@ -790,13 +844,7 @@ async fn a_checkpoint_advancing_during_rpc_invalidates_the_simulation() {
     let journal = Journal::open("sqlite::memory:").await.unwrap();
     let record = record(&journal).await;
     let reply = response(&record.snapshot);
-    let mut next = record.snapshot.clone();
-    next.observation.slot += 1;
-    next.observation.bank = format!("rpc:finalized:{}", next.observation.slot);
-    let clock_account = account(&mut next, sysvar::clock::id());
-    let mut clock: Clock = bincode::deserialize(&clock_account.data).unwrap();
-    clock.slot += 1;
-    clock_account.data = bincode::serialize(&clock).unwrap();
+    let next = next_bank(&record.snapshot);
     let writer = journal.clone();
     let app = Router::new().route(
         "/",
@@ -834,6 +882,87 @@ async fn a_checkpoint_advancing_during_rpc_invalidates_the_simulation() {
         .unwrap();
     assert_eq!(current.snapshot.observation.slot, SLOT + 1);
     assert_ne!(current.id, record.id);
+}
+
+#[tokio::test]
+async fn current_revoke_reobserves_until_simulation_shares_the_finalized_bank() {
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = record(&journal).await;
+    let scope = record.snapshot.scope_id().unwrap();
+    let next = next_bank(&record.snapshot);
+    // The first simulation lands one slot after its observation and must be discarded.
+    let client = current_client(
+        vec![observed(&record.snapshot), observed(&next)],
+        vec![response(&next), response(&next)],
+    );
+    let (status, result) = post_empty(
+        rpc::action_router(journal.clone(), client),
+        format!("/scopes/{scope}/actions/revoke/{}", source()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    let current = journal.latest(&scope).await.unwrap().unwrap();
+    assert_eq!(current.snapshot.observation.slot, SLOT + 1);
+    assert_ne!(current.id, record.id);
+    assert_eq!(result["state_version"], current.id);
+    assert_eq!(result["observation"]["slot"], SLOT + 1);
+    assert_eq!(result["response"]["context"]["slot"], SLOT + 1);
+    assert_eq!(result["changes"][0]["kind"], "removed");
+    assert!(result["signing_transaction"].is_string());
+}
+
+#[tokio::test]
+async fn current_revoke_never_signs_for_a_bank_it_did_not_observe() {
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = record(&journal).await;
+    let scope = record.snapshot.scope_id().unwrap();
+    let later = response(&next_bank(&record.snapshot));
+    let client = current_client(
+        vec![observed(&record.snapshot); rpc::CURRENT_BANK_ATTEMPTS],
+        vec![later; rpc::CURRENT_BANK_ATTEMPTS],
+    );
+    let (status, body) = post_empty(
+        rpc::action_router(journal.clone(), client),
+        format!("/scopes/{scope}/actions/revoke/{}", source()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.get("signing_transaction").is_none());
+    assert_eq!(journal.latest(&scope).await.unwrap().unwrap().id, record.id);
+    for (scope, source, expected) in [
+        ("unknown", source(), StatusCode::NOT_FOUND),
+        (&scope, owner(), StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        let (status, body) = post_empty(
+            rpc::action_router(journal.clone(), RpcClient::new_mock("fails".into())),
+            format!("/scopes/{scope}/actions/revoke/{source}"),
+        )
+        .await;
+        assert_eq!(status, expected, "{body}");
+        assert!(body.get("signing_transaction").is_none());
+    }
+}
+
+#[tokio::test]
+async fn current_revoke_retries_incoherent_clocks_without_retaining_them() {
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = record(&journal).await;
+    let scope = record.snapshot.scope_id().unwrap();
+    let good = observed(&record.snapshot);
+    let mut bad = good.clone();
+    bad["context"]["slot"] = json!(SLOT + 1);
+    let client = current_client(vec![bad.clone(), good], vec![response(&record.snapshot)]);
+    let result = rpc::simulate_current_revoke(&client, &journal, &scope, source())
+        .await
+        .unwrap();
+    assert_eq!(result.state_version, record.id);
+    let client = current_client(vec![bad; rpc::CURRENT_BANK_ATTEMPTS], vec![]);
+    assert!(
+        rpc::simulate_current_revoke(&client, &journal, &scope, source())
+            .await
+            .is_err()
+    );
+    assert_eq!(journal.latest(&scope).await.unwrap().unwrap().id, record.id);
 }
 
 #[tokio::test]
@@ -1024,27 +1153,85 @@ fn receipt(transaction: &Transaction) -> Value {
     })
 }
 
+#[tokio::test]
+async fn fixed_fee_revoke_replays_and_rejects_changed_budget_instructions() {
+    use solana_compute_budget_interface::ComputeBudgetInstruction as Budget;
+    let (before, after, legacy) = verification_fixture();
+    let signer = Keypair::new_from_array([7; 32]);
+    let revoke = spl_token_interface::instruction::revoke(
+        &spl::DelegateAdapter.protocol().program_id,
+        &source(),
+        &signer.pubkey(),
+        &[],
+    )
+    .unwrap();
+    let instructions = vec![
+        Budget::set_compute_unit_limit(10_000),
+        Budget::set_compute_unit_price(1_000_000),
+        revoke,
+    ];
+    let signed = |instructions: &[_]| {
+        Transaction::new_signed_with_payer(
+            instructions,
+            Some(&signer.pubkey()),
+            &[&signer],
+            legacy.message.recent_blockhash,
+        )
+    };
+    let journal = Journal::open("sqlite::memory:").await.unwrap();
+    let record = journal.ingest(before, &catalog()).await.unwrap();
+    let transaction = signed(&instructions);
+    let mut reply = receipt(&transaction);
+    reply["meta"]["fee"] = json!(15_000);
+    let verified = rpc::verify_revoke(
+        &verification_client(reply, &after),
+        &journal,
+        &record.id,
+        source(),
+        &STANDARD.encode(bincode::serialize(&transaction).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        journal
+            .replay_revoke(&verified.verification_id)
+            .await
+            .unwrap()
+            .verification_id,
+        verified.verification_id
+    );
+    for change in 0..5 {
+        let mut changed = instructions.clone();
+        match change {
+            0 => changed[0] = Budget::set_compute_unit_limit(20_000),
+            1 => changed[1] = Budget::set_compute_unit_price(2_000_000),
+            2 => changed.swap(0, 1),
+            3 => changed.push(Budget::request_heap_frame(32_768)),
+            _ => {
+                changed.remove(1);
+            }
+        }
+        let transaction = signed(&changed);
+        let result = rpc::verify_revoke(
+            &RpcClient::new_mock("fails".into()),
+            &journal,
+            &record.id,
+            source(),
+            &STANDARD.encode(bincode::serialize(&transaction).unwrap()),
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Err(Error::Adapter(catalyst_sdk::Error::DiffMismatch))
+            ),
+            "{change}"
+        );
+    }
+}
+
 fn verification_client(receipt: Value, after: &Snapshot) -> RpcClient {
     use solana_rpc_client::mock_sender::MocksMap;
-    let scope = rpc::Scope {
-        cluster: after.observation.cluster.clone(),
-        accounts: after.accounts.iter().map(|(key, _)| *key).collect(),
-        targets: after.targets.clone(),
-        min_context_slot: Some(SLOT + 1),
-    };
-    let values: Vec<_> = scope
-        .accounts()
-        .unwrap()
-        .iter()
-        .map(|key| {
-            after
-                .accounts
-                .iter()
-                .find(|(address, _)| address == key)
-                .map(|(_, account)| ui(account))
-                .unwrap_or(Value::Null)
-        })
-        .collect();
     let mocks = MocksMap(
         [
             (
@@ -1052,13 +1239,7 @@ fn verification_client(receipt: Value, after: &Snapshot) -> RpcClient {
                 [metadata()["cluster"].clone(), metadata()["cluster"].clone()].into(),
             ),
             (RpcRequest::GetTransaction, [receipt].into()),
-            (
-                RpcRequest::GetMultipleAccounts,
-                [json!({
-                    "context": {"slot": after.observation.slot}, "value": values
-                })]
-                .into(),
-            ),
+            (RpcRequest::GetMultipleAccounts, [observed(after)].into()),
         ]
         .into(),
     );

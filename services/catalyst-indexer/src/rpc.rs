@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_account_decoder_client_types::UiAccountEncoding;
 use solana_clock::Clock;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_loader_v3_interface::{get_program_data_address, state::UpgradeableLoaderState};
 use solana_program_pack::Pack;
 use solana_pubkey::Pubkey;
@@ -191,26 +192,14 @@ pub async fn observe(client: &RpcClient, scope: Scope) -> Result<Snapshot, Error
     })
 }
 
-const COMPUTE_BUDGET: Pubkey =
-    solana_pubkey::pubkey!("ComputeBudget111111111111111111111111111111");
-/// Ample for one token instruction; the price makes the priority fee 10,000 lamports.
+// The fixed budget prevents wallet-added fees from changing the reviewed message.
 const REVOKE_UNIT_LIMIT: u32 = 10_000;
 const REVOKE_UNIT_PRICE: u64 = 1_000_000;
 
-/// The canonical revoke carries its own compute budget and priority fee. Wallets add
-/// these when they are missing, and an altered message can never be submitted as reviewed.
 fn revoke_transaction(action: &sdk::Action, payer: Pubkey) -> Transaction {
-    // Built from the action's own instruction type; only program, accounts and data differ.
-    let budget = |tag: u8, value: &[u8]| {
-        let mut instruction = action.instructions[0].clone();
-        instruction.program_id = COMPUTE_BUDGET;
-        instruction.accounts.clear();
-        instruction.data = [&[tag], value].concat();
-        instruction
-    };
     let mut instructions = vec![
-        budget(2, &REVOKE_UNIT_LIMIT.to_le_bytes()),
-        budget(3, &REVOKE_UNIT_PRICE.to_le_bytes()),
+        ComputeBudgetInstruction::set_compute_unit_limit(REVOKE_UNIT_LIMIT),
+        ComputeBudgetInstruction::set_compute_unit_price(REVOKE_UNIT_PRICE),
     ];
     instructions.extend_from_slice(&action.instructions);
     Transaction::new_with_payer(&instructions, Some(&payer))
@@ -594,7 +583,12 @@ fn checked_revoke(
     let action = sdk::actions(&adapter, &authorization, &before, &context)?.remove(0);
     let native = TokenAccount::unpack(&before.account.data)
         .map_err(|error| AdapterError::InvalidState(error.to_string()))?;
-    let mut expected = revoke_transaction(&action, native.owner);
+    // Earlier receipts contain only Revoke; both historical formats remain exact.
+    let mut expected = if signed.message.instructions.len() == 1 {
+        Transaction::new_with_payer(&action.instructions, Some(&native.owner))
+    } else {
+        revoke_transaction(&action, native.owner)
+    };
     expected.message.recent_blockhash = signed.message.recent_blockhash;
     if signed.message != expected.message {
         return Err(AdapterError::DiffMismatch.into());
